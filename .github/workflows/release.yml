@@ -1,0 +1,84 @@
+name: Build and release
+
+# Every push and pull request: unit tests + full Windows build (artifacts kept 14 days).
+# A pushed tag like v1.0.0: same build, then a GitHub Release with the installer,
+# the portable exe, SHA256SUMS.txt and the notes from docs/releases/<tag>.md.
+on:
+  push:
+    branches: ["main"]
+    tags: ["v*"]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+          cache: pip
+          cache-dependency-path: requirements*.txt
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements-dev.txt
+
+      - name: Ensure Inno Setup 6
+        shell: pwsh
+        run: |
+          $iscc = Join-Path ${env:ProgramFiles(x86)} "Inno Setup 6\ISCC.exe"
+          if (-not (Test-Path $iscc)) { choco install innosetup --no-progress -y }
+          if (-not (Test-Path $iscc)) { throw "Inno Setup was not installed" }
+          "ISCC=$iscc" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+
+      - name: Test and build
+        shell: pwsh
+        run: |
+          if ($env:GITHUB_REF -like "refs/tags/v*") {
+            python scripts/build.py --expect-version $env:GITHUB_REF_NAME
+          } else {
+            python scripts/build.py
+          }
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: RDPNexus-windows
+          path: release/*
+          if-no-files-found: error
+          retention-days: 14
+
+  release:
+    needs: build
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: RDPNexus-windows
+          path: release
+
+      - name: Verify checksums
+        working-directory: release
+        run: sha256sum -c SHA256SUMS.txt
+
+      - uses: softprops/action-gh-release@v2
+        with:
+          name: RDP Nexus ${{ github.ref_name }}
+          body_path: docs/releases/${{ github.ref_name }}.md
+          files: release/*
+          fail_on_unmatched_files: true

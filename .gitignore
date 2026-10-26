@@ -1,0 +1,30 @@
+# Python
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.venv/
+venv/
+env/
+
+# Build outputs
+build/
+dist/
+release/
+*.spec
+
+# Local / editor
+.scratch/
+.idea/
+.vscode/
+*.log
+Thumbs.db
+desktop.ini
+
+# Never commit local settings or secrets
+settings.json
+.env
+*.env
+*.pfx
+*.p12
+*.pem
+*.key

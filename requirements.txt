@@ -1,0 +1,4 @@
+# Runtime dependencies (Windows 10/11, Python 3.10–3.13)
+customtkinter>=5.2.2,<7
+pystray>=0.19.5,<0.20
+Pillow>=10.0,<14
