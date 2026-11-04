@@ -85,3 +85,9 @@ def test_saved_file_is_plain_json(tmp_path):
     data = json.loads(path.read_text(encoding="utf-8"))
     assert data["interval_minutes"] == 13.0
     assert "password" not in json.dumps(data).lower()
+
+
+def test_key_timing_default_and_validation():
+    assert DEFAULTS.key_timing == "normal"
+    assert validate({"key_timing": "slow"}).key_timing == "slow"
+    assert validate({"key_timing": "warp"}).key_timing == "normal"

@@ -27,7 +27,8 @@ from enum import Enum
 
 from input_safety import SafetyGate
 from keyboard_navigation import (
-    SHUFFLE_APPS, SWITCH_SHORTCUTS, ActionResult, AppShuffler, KeyboardNavigator, chord_text, scroll_key_for,
+    PACING, SHUFFLE_APPS, SWITCH_SHORTCUTS, ActionResult, AppShuffler, KeyboardNavigator, chord_text,
+    scroll_key_for,
 )
 from pointer_controller import ManualMovementMonitor, PointerController
 from settings import Settings
@@ -71,6 +72,7 @@ class EngineConfig:
     pointer_interval_s: float = 60
     pointer_range_px: int = 20
     resume_policy: str = "auto"
+    key_timing: str = "normal"      # "normal" | "slow" (see keyboard_navigation.PACING)
     idle_guard_s: float = 10.0      # no automated input within this long after real user input
     pointer_rest_s: float = 3.0     # mouse must rest this long over the RDP window before arming
     action_gap_s: float = 0.5       # pause between the switch and the scroll action
@@ -89,6 +91,7 @@ class EngineConfig:
             pointer_interval_s=float(s.pointer_interval_seconds),
             pointer_range_px=s.pointer_range_px,
             resume_policy=s.resume_policy,
+            key_timing=s.key_timing,
         )
         return replace(cfg, **overrides) if overrides else cfg
 
@@ -156,6 +159,9 @@ class AutomationEngine:
         self._shutdown = threading.Event()
         self._last_step: float | None = None
         self._hook_failed = False
+        self._test_until: float | None = None
+        self._test_running = False
+        self._test_cancel = threading.Event()
 
         self._thread: threading.Thread | None = None
         if start_thread:
@@ -232,6 +238,7 @@ class AutomationEngine:
 
     def pause(self) -> None:
         with self._lock:
+            self._cancel_test()
             if self._run != RunState.RUNNING:
                 return
             self._cancel.set()
@@ -254,6 +261,7 @@ class AutomationEngine:
     def stop(self) -> None:
         with self._lock:
             self._cancel.set()
+            self._cancel_test()
             if self._run != RunState.STOPPED:
                 self._log("info", "Stopped")
             self._run = RunState.STOPPED
@@ -276,6 +284,29 @@ class AutomationEngine:
                 else:
                     self._set_pointer(PointerState.IDLE, "")
         self._wake.set()
+
+    TEST_TIMEOUT_S = 15.0
+    TEST_REST_S = 1.5
+
+    def test_now(self) -> bool:
+        """Run one switch + scroll as soon as the RDP window is active and the user
+        keeps still.  Works in any state and does not start automation."""
+        with self._lock:
+            if self._target is None:
+                self._detail = "Select your RDP window first"
+                self._log("warning", self._detail)
+                return False
+            self._test_cancel = threading.Event()
+            self._test_until = self._clock() + self.TEST_TIMEOUT_S
+            self._detail = "Test: click inside the RDP window, then keep still…"
+            self._log("info", "Test requested: click inside the RDP window and keep still")
+        self._wake.set()
+        return True
+
+    @property
+    def testing(self) -> bool:
+        """True from Test now until its keys have been sent (or it was cancelled)."""
+        return self._test_until is not None or self._test_running
 
     def snapshot(self) -> Snapshot:
         with self._lock:
@@ -317,6 +348,12 @@ class AutomationEngine:
     def _log(self, level: str, message: str) -> None:
         self._events.append(LogEntry(time.time(), level, message))
         getattr(log, level if level in ("info", "warning", "error") else "info")(message)
+
+    def _cancel_test(self) -> None:
+        self._test_cancel.set()
+        if self._test_until is not None:
+            self._test_until = None
+            self._log("info", "Test cancelled")
 
     def _begin_running(self, message: str) -> None:
         self._cancel = threading.Event()
@@ -372,6 +409,8 @@ class AutomationEngine:
         with self._lock:
             self._target_status = st
         self._manage_hook(run, cfg)
+        if self._test_until is not None:
+            self._run_test(target, cfg, st)
         if run != RunState.RUNNING:
             return
 
@@ -489,26 +528,72 @@ class AutomationEngine:
             self._shuffler = AppShuffler(cfg.app_count)
         return self._shuffler
 
-    def _keyboard_cycle(self, target: RdpWindow, cfg: EngineConfig) -> None:
-        cancel = self._cancel
+    def _run_test(self, target: RdpWindow | None, cfg: EngineConfig, st: TargetStatus | None) -> None:
+        with self._lock:
+            if self._test_until is None:
+                return
+            if self._clock() > self._test_until:
+                self._test_until = None
+                self._detail = "Test cancelled: the RDP window was not active within 15 s"
+                self._log("warning", self._detail)
+                return
+        if st is None or not st.ok:
+            with self._lock:
+                self._detail = f"Test waiting: {st.message if st else 'no RDP window selected'}"
+            return
+        session = self.gate.session_verdict()
+        if not session.ok:
+            with self._lock:
+                self._detail = f"Test waiting: {session.message}"
+            return
+        since = self.gate.seconds_since_user_activity()
+        if since is not None and since < self.TEST_REST_S:
+            with self._lock:
+                self._detail = "Test: keep still for a moment…"
+            return
+        switch = SWITCH_SHORTCUTS.get(cfg.switch_shortcut, SWITCH_SHORTCUTS["off"])
+        with self._lock:
+            self._test_until = None
+            if not switch.keys and cfg.scroll_key == "off":
+                self._detail = "Nothing to test: switching and scrolling are both off"
+                self._log("warning", self._detail)
+                return
+            self._test_running = True
+            cancel = self._test_cancel
+            self._log("info", "Test running")
+        try:
+            sent = self._keyboard_cycle(target, replace(cfg, idle_guard_s=1.0), cancel)
+        finally:
+            with self._lock:
+                self._test_running = False
+        with self._lock:
+            self._log("info" if sent else "warning", "Test finished" if sent else "Test sent nothing (see above)")
+
+    def _keyboard_cycle(self, target: RdpWindow, cfg: EngineConfig, cancel: threading.Event | None = None) -> bool:
+        cancel = cancel or self._cancel
+        pacing = PACING.get(cfg.key_timing, PACING["normal"])
         switch = SWITCH_SHORTCUTS.get(cfg.switch_shortcut, SWITCH_SHORTCUTS["off"])
         sent_any = False
         try:
             if switch.keys:
                 if cancel.is_set():
-                    return
+                    return sent_any
                 if switch.id == SHUFFLE_APPS:
                     shuffler = self._shuffler_for(cfg)
                     _app, steps = shuffler.peek()
-                    r = self.keyboard.send_chord(target, switch.keys, cfg.idle_guard_s, repeat=steps)
+                    r = self.keyboard.send_chord(target, switch.keys, cfg.idle_guard_s, repeat=steps,
+                                                 pacing=pacing, cancel=cancel)
                     if r.ok:
                         shuffler.commit()
-                        r = ActionResult(True, "ok", f"Switched remote app ({chord_text(switch.keys, steps)}, "
-                                                     f"shuffled order of {cfg.app_count})")
+                        took = r.message.rsplit(" over ", 1)[-1] if " over " in r.message else ""
+                        r = ActionResult(True, "ok", f"Switched remote app with {chord_text(switch.keys, steps)}"
+                                                     f"{' over ' + took if took else ''} "
+                                                     f"(shuffled order of {cfg.app_count})")
                 else:
-                    r = self.keyboard.send_chord(target, switch.keys, cfg.idle_guard_s)
+                    r = self.keyboard.send_chord(target, switch.keys, cfg.idle_guard_s, pacing=pacing,
+                                                 cancel=cancel)
                 if not self._record(r):
-                    return
+                    return sent_any
                 sent_any = True
 
             key = None
@@ -517,12 +602,12 @@ class AutomationEngine:
                 key = scroll_key_for(cfg.scroll_key, down)
             if key:
                 if sent_any and cancel.wait(cfg.action_gap_s):
-                    return
+                    return sent_any
                 if cancel.is_set():
-                    return
-                r = self.keyboard.send_chord(target, (key,), cfg.idle_guard_s)
+                    return sent_any
+                r = self.keyboard.send_chord(target, (key,), cfg.idle_guard_s, pacing=pacing, cancel=cancel)
                 if not self._record(r):
-                    return
+                    return sent_any
                 sent_any = True
                 if cfg.scroll_direction == "alternate":
                     self._scroll_down_next = not self._scroll_down_next
@@ -535,6 +620,7 @@ class AutomationEngine:
                         self._ptr_due = now + 2  # keep pointer moves clear of key presses
                 if sent_any:
                     self._cycles += 1
+        return sent_any
 
     def _record(self, r: ActionResult) -> bool:
         with self._lock:

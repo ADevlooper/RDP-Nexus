@@ -15,7 +15,7 @@ from dataclasses import asdict, dataclass, fields, replace
 
 import app_info
 from keyboard_navigation import (
-    BROWSER, MAX_APPS, MIN_APPS, MODE_DEFAULT_SWITCH, MODE_SWITCH_OPTIONS, MODES, REMOTE_APP,
+    BROWSER, KEY_TIMINGS, MAX_APPS, MIN_APPS, MODE_DEFAULT_SWITCH, MODE_SWITCH_OPTIONS, MODES, REMOTE_APP,
     SCROLL_DIRECTIONS, SCROLL_KEYS,
 )
 
@@ -43,6 +43,7 @@ class Settings:
     pointer_interval_seconds: int = 60
     pointer_range_px: int = 20
     resume_policy: str = "auto"
+    key_timing: str = "normal"
     always_on_top: bool = True
     expanded: bool = False
     window_x: int | None = None
@@ -102,6 +103,7 @@ def validate(raw: dict) -> Settings:
         pointer_range_px=_num(raw.get("pointer_range_px"), d.pointer_range_px, POINTER_RANGE_MIN,
                               POINTER_RANGE_MAX, int),
         resume_policy=_choice(raw.get("resume_policy"), d.resume_policy, RESUME_POLICIES),
+        key_timing=_choice(raw.get("key_timing"), d.key_timing, KEY_TIMINGS),
         always_on_top=_flag(raw.get("always_on_top"), d.always_on_top),
         expanded=_flag(raw.get("expanded"), d.expanded),
         window_x=_opt_int(raw.get("window_x")),

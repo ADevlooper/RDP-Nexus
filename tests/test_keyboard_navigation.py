@@ -5,8 +5,8 @@ import pytest
 import winapi as w
 from input_safety import INJECTION_SIGNATURE, Verdict
 from keyboard_navigation import (
-    KEYS, MODE_SWITCH_OPTIONS, SCROLL_KEYS, SHUFFLE_APPS, SWITCH_SHORTCUTS, AppShuffler, KeyboardNavigator,
-    KeyEvent, build_chord, chord_text, to_inputs,
+    KEYS, MODE_SWITCH_OPTIONS, PACING, SCROLL_KEYS, SHUFFLE_APPS, SWITCH_SHORTCUTS, AppShuffler, KeyboardNavigator,
+    KeyEvent, build_chord, chord_text, paced_steps, to_inputs,
 )
 
 # --- allow-list ------------------------------------------------------------------
@@ -124,19 +124,58 @@ def test_shuffle_count_bounds():
         AppShuffler(21)
 
 
-# --- navigator ---------------------------------------------------------------------
+# --- paced sending ------------------------------------------------------------------
+
+
+def test_paced_steps_hold_alt_across_taps():
+    p = PACING["normal"]
+    steps = paced_steps(("alt", "pageup"), 2, p)
+    assert [(s.event.key, s.event.down, s.delay_ms) for s in steps] == [
+        ("alt", True, p.lead_ms),
+        ("pageup", True, p.hold_ms), ("pageup", False, p.gap_ms),
+        ("pageup", True, p.hold_ms), ("pageup", False, p.tail_ms),
+        ("alt", False, 0),
+    ]
+
+
+def test_paced_single_key_tap():
+    p = PACING["slow"]
+    steps = paced_steps(("pagedown",), 1, p)
+    assert [(s.event.key, s.event.down, s.delay_ms) for s in steps] == [("pagedown", True, p.hold_ms),
+                                                                         ("pagedown", False, 0)]
+
+
+def test_slow_is_slower_than_normal():
+    n, s = PACING["normal"], PACING["slow"]
+    assert all(getattr(s, f) > getattr(n, f) for f in ("lead_ms", "hold_ms", "gap_ms", "tail_ms"))
 
 
 class FakeGate:
-    def __init__(self, verdict=Verdict(True, "ok", "OK"), foreground=(True, True)):
+    def __init__(self, verdict=Verdict(True, "ok", "OK")):
         self.verdict = verdict
-        self.fg = list(foreground)
+        self.foreground = True
+        self.activity_at = None  # clock time of the last user input
+        self.held = []
+        self.buttons = []
+        self.clock = None
 
     def check_keyboard(self, target, idle_guard_s):
         return self.verdict
 
     def still_foreground(self, target):
-        return self.fg.pop(0) if self.fg else True
+        return self.foreground
+
+    def observe(self):
+        pass
+
+    def seconds_since_user_activity(self):
+        return None if self.activity_at is None else self.clock() - self.activity_at
+
+    def held_keys(self):
+        return list(self.held)
+
+    def held_buttons(self):
+        return list(self.buttons)
 
 
 class FakeLedger:
@@ -147,50 +186,111 @@ class FakeLedger:
         self.records += 1
 
 
-def test_navigator_sends_whole_chord_in_one_call():
-    calls = []
-    nav = KeyboardNavigator(FakeGate(), FakeLedger(), send=lambda inputs: calls.append(inputs) or len(inputs))
-    r = nav.send_chord(object(), ("alt", "pageup"), 10, repeat=2)
-    assert r.ok
-    assert len(calls) == 1 and len(calls[0]) == 6
+class Rig:
+    """Navigator with a fake clock; `on_send(n)` lets a test change the world after the n-th event."""
+
+    def __init__(self, gate=None, accept=True):
+        self.t = 0.0
+        self.gate = gate or FakeGate()
+        self.gate.clock = lambda: self.t
+        self.sent = []  # (key name, down)
+        self.delays = []
+        self.on_send = lambda n: None
+        self.accept = accept
+        scan_to_key = {k.scan: name for name, k in KEYS.items()}
+
+        def send(inputs):
+            if not self.accept:
+                return 0
+            for i in inputs:
+                self.sent.append((scan_to_key[i.ki.wScan], not i.ki.dwFlags & w.KEYEVENTF_KEYUP))
+            self.on_send(len(self.sent))
+            return len(inputs)
+
+        def sleep(s):
+            self.delays.append(round(s * 1000))
+            self.t += s
+
+        self.nav = KeyboardNavigator(self.gate, FakeLedger(), send=send, sleep=sleep, clock=lambda: self.t)
 
 
-def test_navigator_does_not_send_when_gate_denies():
-    calls = []
-    gate = FakeGate(verdict=Verdict(False, "not_foreground", "RDP window is not the active window"))
-    nav = KeyboardNavigator(gate, FakeLedger(), send=lambda inputs: calls.append(inputs) or len(inputs))
-    r = nav.send_chord(object(), ("ctrl", "tab"), 10)
-    assert not r.ok and r.code == "not_foreground"
-    assert calls == []
+def test_paced_send_one_event_per_call_in_order():
+    rig = Rig()
+    r = rig.nav.send_chord(object(), ("alt", "pageup"), 10, repeat=3)
+    assert r.ok, r.message
+    assert rig.sent == [("alt", True)] + [("pageup", True), ("pageup", False)] * 3 + [("alt", False)]
+    p = PACING["normal"]
+    assert rig.delays == [p.lead_ms, p.hold_ms, p.gap_ms, p.hold_ms, p.gap_ms, p.hold_ms, p.tail_ms]
 
 
-def test_navigator_last_moment_focus_check():
-    calls = []
-    nav = KeyboardNavigator(FakeGate(foreground=(False,)), FakeLedger(),
-                            send=lambda inputs: calls.append(inputs) or len(inputs))
-    assert not nav.send_chord(object(), ("ctrl", "tab"), 10).ok
-    assert calls == []
+def test_gate_denial_sends_nothing():
+    rig = Rig(FakeGate(verdict=Verdict(False, "not_foreground", "RDP window is not the active window")))
+    r = rig.nav.send_chord(object(), ("ctrl", "tab"), 10)
+    assert not r.ok and r.code == "not_foreground" and rig.sent == []
 
 
-def test_navigator_reports_focus_change_during_send():
-    nav = KeyboardNavigator(FakeGate(foreground=(True, False)), FakeLedger(), send=lambda inputs: len(inputs))
-    r = nav.send_chord(object(), ("ctrl", "tab"), 10)
-    assert not r.ok and r.code == "focus_changed"
+def test_focus_lost_mid_sequence_releases_alt():
+    rig = Rig()
+    rig.on_send = lambda n: setattr(rig.gate, "foreground", n < 1)  # focus moves right after Alt down
+    r = rig.nav.send_chord(object(), ("alt", "pageup"), 10, repeat=2)
+    assert not r.ok and r.code == "focus_changed" and "released" in r.message
+    assert rig.sent == [("alt", True), ("alt", False)]  # no Page Up after focus loss; Alt not left down
 
 
-def test_navigator_releases_keys_after_partial_send():
-    calls = []
+def test_cancel_mid_sequence_releases_keys():
+    import threading
+    cancel = threading.Event()
+    rig = Rig()
+    rig.on_send = lambda n: cancel.set() if n == 2 else None  # after Alt down + Page Up down
+    r = rig.nav.send_chord(object(), ("alt", "pageup"), 10, repeat=3, cancel=cancel)
+    assert r.code == "cancelled"
+    assert rig.sent == [("alt", True), ("pageup", True), ("pageup", False), ("alt", False)]
 
-    def send(inputs):
-        calls.append(inputs)
-        return 2 if len(calls) == 1 else len(inputs)  # first call: only Ctrl down + Tab down accepted
 
-    nav = KeyboardNavigator(FakeGate(foreground=(True, True, True)), FakeLedger(), send=send)
-    r = nav.send_chord(object(), ("ctrl", "tab"), 10)
-    assert r.code == "send_failed"
-    release = calls[1]
-    assert [i.ki.wScan for i in release] == [0x0F, 0x1D]
-    assert all(i.ki.dwFlags & w.KEYEVENTF_KEYUP for i in release)
+def test_user_activity_mid_sequence_aborts():
+    rig = Rig()
+
+    def user_types(n):
+        if n == 1:
+            rig.gate.activity_at = rig.t + 0.01  # real input after the sequence began
+    rig.on_send = user_types
+    r = rig.nav.send_chord(object(), ("alt", "pageup"), 10, repeat=2)
+    assert r.code == "user_active"
+    assert rig.sent[-1] == ("alt", False) and ("pageup", True) not in rig.sent
+
+
+def test_activity_before_sequence_does_not_abort():
+    rig = Rig()
+    rig.gate.activity_at = -30.0
+    assert rig.nav.send_chord(object(), ("alt", "pageup"), 10).ok
+
+
+def test_our_own_alt_is_not_a_foreign_held_key():
+    rig = Rig()
+    rig.on_send = lambda n: setattr(rig.gate, "held", ["Alt"] if n == 1 else [])
+    assert rig.nav.send_chord(object(), ("alt", "pageup"), 10).ok
+
+
+def test_foreign_key_pressed_mid_sequence_aborts():
+    rig = Rig()
+    rig.on_send = lambda n: setattr(rig.gate, "held", ["Alt", "Shift"] if n >= 1 else [])
+    r = rig.nav.send_chord(object(), ("alt", "pageup"), 10)
+    assert r.code == "held" and "Shift" in r.message
+    assert rig.sent == [("alt", True), ("alt", False)]
+
+
+def test_blocked_send_reports_failure():
+    rig = Rig(accept=False)
+    r = rig.nav.send_chord(object(), ("ctrl", "tab"), 10)
+    assert r.code == "send_failed" and rig.sent == []
+
+
+def test_focus_change_right_after_sequence_is_reported():
+    rig = Rig()
+    rig.on_send = lambda n: setattr(rig.gate, "foreground", n < 6)
+    r = rig.nav.send_chord(object(), ("alt", "pageup"), 10, repeat=2)
+    assert r.code == "focus_changed"
+    assert rig.sent[-1] == ("alt", False)
 
 
 def test_shuffle_shortcut_is_alt_pageup():

@@ -6,12 +6,14 @@ Windows shell shortcut (no Win key, no Alt+Tab, no Ctrl+Alt+Del, no Alt+F4),
 so even a mis-routed chord cannot switch, close or lock local applications.
 
 Keys are sent as hardware scan codes (KEYEVENTF_SCANCODE), which is what the
-Remote Desktop client forwards to the remote session.
+Remote Desktop client forwards to the remote session, one event at a time with
+human-like timing (see Pacing).
 """
 
 from __future__ import annotations
 
 import random
+import time
 from dataclasses import dataclass
 
 import winapi as w
@@ -200,6 +202,56 @@ class AppShuffler:
 
 # --- sending ---------------------------------------------------------------------
 @dataclass(frozen=True)
+class Pacing:
+    """Human-like key timing.  The Remote Desktop client only turns Alt+Page Up into
+    a remote Alt+Tab when it sees Alt still held while it processes Page Up, and
+    the remote task switcher needs time to advance between taps.  A zero-delay
+    burst is processed after Alt has already been released, so it is not used."""
+
+    lead_ms: int   # after pressing the modifier(s), before the first key
+    hold_ms: int   # how long each key is held down
+    gap_ms: int    # pause between repeated taps of the key
+    tail_ms: int   # after the last tap, before releasing the modifier(s)
+
+
+PACING = {
+    "normal": Pacing(lead_ms=80, hold_ms=50, gap_ms=150, tail_ms=150),
+    "slow": Pacing(lead_ms=150, hold_ms=90, gap_ms=300, tail_ms=300),
+}
+KEY_TIMINGS = {"normal": "Normal", "slow": "Slow"}
+_MODIFIER_STEP_MS = 20
+_GATE_NAMES = {"ctrl": "Ctrl", "shift": "Shift", "alt": "Alt"}
+
+
+@dataclass(frozen=True)
+class Step:
+    event: KeyEvent
+    delay_ms: int  # wait after sending this event
+
+
+def paced_steps(keys: tuple[str, ...], repeat: int, pacing: Pacing) -> list[Step]:
+    events = build_chord(keys, repeat)
+    if not events:
+        return []
+    main = keys[-1]
+    steps = []
+    for i, ev in enumerate(events):
+        nxt = events[i + 1] if i + 1 < len(events) else None
+        if nxt is None:
+            delay = 0
+        elif ev.key != main:  # a modifier going down or up
+            delay = pacing.lead_ms if (ev.down and nxt.key == main) else _MODIFIER_STEP_MS
+        elif ev.down:
+            delay = pacing.hold_ms
+        elif nxt.key == main:
+            delay = pacing.gap_ms
+        else:
+            delay = pacing.tail_ms
+        steps.append(Step(ev, delay))
+    return steps
+
+
+@dataclass(frozen=True)
 class ActionResult:
     ok: bool
     code: str
@@ -207,43 +259,83 @@ class ActionResult:
 
 
 class KeyboardNavigator:
-    def __init__(self, gate: SafetyGate, ledger: InjectionLedger, send=w.send_inputs):
+    """Sends one chord as a paced sequence of single key events.
+
+    Before EVERY event the RDP window must still be the foreground window, no
+    new user input may have arrived and no other key/button may be held.  If
+    anything changes mid-sequence, every key RDP Nexus is holding is released
+    at once (a stuck Alt would be worse than a stray key-up) and the action is
+    reported as interrupted.
+    """
+
+    def __init__(self, gate: SafetyGate, ledger: InjectionLedger, send=w.send_inputs, sleep=None,
+                 clock=time.monotonic):
         self.gate = gate
         self.ledger = ledger
         self._send = send
+        self._sleep = sleep
+        self._clock = clock
 
-    def send_chord(self, target: RdpWindow, keys: tuple[str, ...], idle_guard_s: float,
-                   repeat: int = 1) -> ActionResult:
+    def _wait(self, seconds: float, cancel) -> None:
+        if seconds <= 0:
+            return
+        if self._sleep is not None:
+            self._sleep(seconds)
+        elif cancel is not None:
+            cancel.wait(seconds)
+        else:
+            time.sleep(seconds)
+
+    def _interruption(self, target: RdpWindow, held: list[str], started: float, cancel) -> tuple[str, str] | None:
+        if cancel is not None and cancel.is_set():
+            return "cancelled", "automation was paused or stopped"
+        if not self.gate.still_foreground(target):
+            return "focus_changed", "the RDP window lost focus"
+        self.gate.observe()
+        since = self.gate.seconds_since_user_activity()
+        if since is not None and since < self._clock() - started:
+            return "user_active", "you used the keyboard or mouse"
+        ours = {_GATE_NAMES[k] for k in held if k in _GATE_NAMES}
+        foreign = [k for k in self.gate.held_keys() if k not in ours] + self.gate.held_buttons()
+        if foreign:
+            return "held", f"{', '.join(foreign)} was pressed"
+        return None
+
+    def _release(self, held: list[str]) -> None:
+        if held:
+            self._send(to_inputs([KeyEvent(k, False) for k in reversed(held)]))
+            self.ledger.record()
+            held.clear()
+
+    def send_chord(self, target: RdpWindow, keys: tuple[str, ...], idle_guard_s: float, repeat: int = 1,
+                   pacing: Pacing = PACING["normal"], cancel=None) -> ActionResult:
         text = chord_text(keys, repeat)
         verdict = self.gate.check_keyboard(target, idle_guard_s)
         if not verdict.ok:
             return ActionResult(False, verdict.code, f"Skipped {text}: {verdict.message}")
-        events = build_chord(keys, repeat)
-        inputs = to_inputs(events)
-        # Last-moment check, then one atomic SendInput call for the whole chord.
+        steps = paced_steps(keys, repeat, pacing)
+        held: list[str] = []
+        started = self._clock()
+        try:
+            for step in steps:
+                problem = self._interruption(target, held, started, cancel)
+                if problem:
+                    self._release(held)
+                    code, why = problem
+                    return ActionResult(False, code, f"{text} interrupted: {why}; keys released")
+                if self._send(to_inputs([step.event])) != 1:
+                    self._release(held)
+                    return ActionResult(False, "send_failed",
+                                        f"{text} was blocked by Windows; is the RDP client running as administrator?")
+                self.ledger.record()
+                if step.event.down:
+                    held.append(step.event.key)
+                elif step.event.key in held:
+                    held.remove(step.event.key)
+                self._wait(step.delay_ms / 1000.0, cancel)
+        finally:
+            self._release(held)  # never leave a key pressed, whatever happened
         if not self.gate.still_foreground(target):
-            return ActionResult(False, "not_foreground", f"Skipped {text}: RDP window lost focus")
-        sent = self._send(inputs)
-        self.ledger.record()
-        focus_kept = self.gate.still_foreground(target)
-        if sent != len(inputs):
-            self._release_partial(target, events[:sent])
-            return ActionResult(False, "send_failed",
-                                f"{text} was blocked by Windows ({sent}/{len(inputs)} events); "
-                                "is the RDP client running as administrator?")
-        if not focus_kept:
             return ActionResult(False, "focus_changed",
-                                f"Focus left the RDP window while {text} was being sent; automation suspended")
-        return ActionResult(True, "ok", f"Sent {text}")
-
-    def _release_partial(self, target: RdpWindow, delivered: list[KeyEvent]) -> None:
-        """If Windows accepted only part of a chord, release any key left pressed."""
-        pressed: list[str] = []
-        for ev in delivered:
-            if ev.down:
-                pressed.append(ev.key)
-            elif ev.key in pressed:
-                pressed.remove(ev.key)
-        if pressed and self.gate.still_foreground(target):
-            self._send(to_inputs([KeyEvent(k, False) for k in reversed(pressed)]))
-            self.ledger.record()
+                                f"Focus left the RDP window right after {text}; automation suspended")
+        return ActionResult(True, "ok", f"Sent {text} over {self._clock() - started:.2f} s")

@@ -17,6 +17,7 @@ import json
 import os
 import sys
 import threading
+import time
 from ctypes import wintypes
 
 ctypes.windll.shcore.SetProcessDpiAwareness(2)
@@ -68,7 +69,8 @@ WS_OVERLAPPEDWINDOW, WS_VISIBLE, WS_CHILD, WS_POPUP, WS_CAPTION = 0x00CF0000, 0x
 SW_MINIMIZE, SW_RESTORE, SW_HIDE, SW_SHOW, SW_SHOWNOACTIVATE = 6, 9, 0, 5, 4
 
 COMMANDS = ["focus rdp", "focus local", "minimize rdp", "restore rdp", "hide input", "show input", "dialog",
-            "close dialog", "close rdp", "quit"]
+            "close dialog", "close rdp", "steal focus on alt", "quit"]
+flags = {"steal_on_alt": False}
 
 _lock = threading.Lock()
 
@@ -88,8 +90,13 @@ def make_proc(name):
     def proc(hwnd, msg, wparam, lparam):
         who = names.get(hwnd, name)
         if msg in (WM_KEYDOWN, WM_KEYUP, WM_SYSKEYDOWN, WM_SYSKEYUP):
-            emit(event="key", window=who, down=msg in (WM_KEYDOWN, WM_SYSKEYDOWN),
-                 scan=(lparam >> 16) & 0xFF, extended=bool((lparam >> 24) & 1), vk=int(wparam))
+            down = msg in (WM_KEYDOWN, WM_SYSKEYDOWN)
+            scan = (lparam >> 16) & 0xFF
+            emit(event="key", window=who, down=down, scan=scan, extended=bool((lparam >> 24) & 1), vk=int(wparam),
+                 t=time.perf_counter())
+            if flags["steal_on_alt"] and who == "rdp" and down and scan == 0x38:
+                flags["steal_on_alt"] = False  # simulate the user switching apps mid-shortcut
+                user32.SetForegroundWindow(windows["local"])
             return 0  # never let DefWindowProc start menu mode
         if msg == WM_MOUSEMOVE:
             pt = wintypes.POINT(ctypes.c_short(lparam & 0xFFFF).value, ctypes.c_short((lparam >> 16) & 0xFFFF).value)
@@ -153,6 +160,8 @@ def handle(cmd):
         user32.DestroyWindow(windows.pop("dialog"))
     elif cmd == "close rdp":
         user32.DestroyWindow(windows["rdp"])
+    elif cmd == "steal focus on alt":
+        flags["steal_on_alt"] = True
     emit(event="done", command=cmd)
 
 

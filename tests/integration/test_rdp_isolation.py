@@ -163,37 +163,99 @@ def test_connection_dialog_and_local_windows_are_rejected(app):
     assert WindowInspector().describe(app.ready["rdp"]) is None  # python.exe is not an RDP client
 
 
-def test_keys_reach_only_the_rdp_window_with_exact_sequence(app):
+def _wait_cycles(engine, n, timeout):
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline and engine.snapshot().cycles < n:
+        time.sleep(0.05)
+    return engine.snapshot().cycles
+
+
+def _parse_cycles(events):
+    """Split rdp key events into cycles: Alt down, (PgUp down/up) x k, Alt up, scroll down/up."""
+    keys = [(e["scan"], e["extended"], e["down"], e["t"]) for e in events]
+    cycles, i = [], 0
+    while i < len(keys):
+        assert keys[i][:3] == (*ALT, True), keys
+        alt_down = keys[i][3]
+        i += 1
+        taps = []
+        while keys[i][:3] == (*PGUP, True):
+            assert keys[i + 1][:3] == (*PGUP, False)
+            taps.append((keys[i][3], keys[i + 1][3]))
+            i += 2
+        assert keys[i][:3] == (*ALT, False)
+        alt_up = keys[i][3]
+        i += 1
+        scroll_down, scroll_up = keys[i], keys[i + 1]
+        assert scroll_down[2] and not scroll_up[2] and scroll_down[:2] == scroll_up[:2]
+        cycles.append({"alt_down": alt_down, "taps": taps, "alt_up": alt_up, "scroll": scroll_down[:2]})
+        i += 2
+    return cycles
+
+
+def test_keys_reach_only_the_rdp_window_paced_like_a_person(app):
     engine, _insp, _t = build(app)
     try:
         mark = app.mark()
         assert engine.start()
         assert wait_state(engine, DisplayState.RUNNING)
-        time.sleep(3.6)  # two cycles at 1.5 s
+        assert _wait_cycles(engine, 2, 8.0) >= 2
         engine.stop()
         time.sleep(0.3)
-        rdp_keys = keys_of(app.since(mark, "key", "rdp"))
         assert app.since(mark, "key", "local") == []
         assert app.since(mark, "click") == []
-        # Parse cycles: Alt down, (PgUp down/up) x k, Alt up, then one scroll key down/up.
-        cycles, i = [], 0
-        while i < len(rdp_keys):
-            assert rdp_keys[i] == (*ALT, True), rdp_keys
-            i += 1
-            k = 0
-            while rdp_keys[i] == (*PGUP, True):
-                assert rdp_keys[i + 1] == (*PGUP, False)
-                k += 1
-                i += 2
-            assert rdp_keys[i] == (*ALT, False)
-            i += 1
-            scroll_down, scroll_up = rdp_keys[i], rdp_keys[i + 1]
-            assert scroll_down[2] and not scroll_up[2] and scroll_down[:2] == scroll_up[:2]
-            cycles.append((k, scroll_down[:2]))
-            i += 2
-        assert len(cycles) == 2, cycles
-        assert all(1 <= k <= 2 for k, _ in cycles)            # app_count=3 -> 1 or 2 presses, never 0
-        assert [s for _, s in cycles] == [PGDN, PGUP]           # alternating scroll
+        cycles = _parse_cycles(app.since(mark, "key", "rdp"))
+        assert len(cycles) == engine.snapshot().cycles
+        assert all(1 <= len(c["taps"]) <= 2 for c in cycles)      # app_count=3 -> 1 or 2 presses, never 0
+        assert [c["scroll"] for c in cycles][:2] == [PGDN, PGUP]   # alternating scroll
+        for c in cycles:
+            # Alt is held well before the first Page Up and released well after the last one,
+            # so the RDP client sees Alt+Page Up (= remote Alt+Tab) for every tap.
+            assert c["taps"][0][0] - c["alt_down"] >= 0.06
+            assert c["alt_up"] - c["taps"][-1][1] >= 0.12
+            for down, up in c["taps"]:
+                assert up - down >= 0.03
+            for (_d1, up1), (down2, _u2) in zip(c["taps"], c["taps"][1:]):
+                assert down2 - up1 >= 0.12
+    finally:
+        engine.shutdown()
+
+
+def test_focus_change_mid_shortcut_releases_alt(app):
+    engine, _insp, _t = build(app, switch_shortcut="alt_pageup", scroll_key="off", key_timing="slow")
+    try:
+        app.command("steal focus on alt")
+        mark = app.mark()
+        assert engine.start()
+        deadline = time.monotonic() + 5
+        while time.monotonic() < deadline and not app.since(mark, "key", "local"):
+            time.sleep(0.02)
+        time.sleep(0.5)
+        rdp = keys_of(app.since(mark, "key", "rdp"))
+        local = app.since(mark, "key", "local")
+        assert rdp == [(*ALT, True)], rdp                       # no Page Up after focus moved
+        assert local and all(not e["down"] for e in local), local  # local app only saw Alt being released
+        assert not w.key_is_down(w.VK_MENU)                       # nothing left stuck
+        assert engine.snapshot().state == DisplayState.UNAVAILABLE
+        assert any("interrupted" in e.message for e in engine.snapshot().events)
+    finally:
+        engine.shutdown()
+
+
+def test_test_now_sends_one_cycle_without_starting(app):
+    engine, _insp, _t = build(app)
+    try:
+        mark = app.mark()
+        assert engine.test_now()
+        deadline = time.monotonic() + 6
+        while time.monotonic() < deadline and engine.testing:
+            time.sleep(0.05)
+        time.sleep(0.3)
+        events = app.since(mark, "key", "rdp")
+        assert len(_parse_cycles(events)) == 1
+        assert engine.snapshot().state == DisplayState.STOPPED
+        time.sleep(2.0)
+        assert len(app.since(mark, "key", "rdp")) == len(events)  # one-shot: nothing more is sent
     finally:
         engine.shutdown()
 

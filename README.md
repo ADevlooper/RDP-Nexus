@@ -25,6 +25,8 @@ the moment the RDP window isn't the active window, and it never touches your loc
   with an adjustable range (default 20 px) and no clicks, ever.
 - **Your input always wins**: touching the mouse pauses pointer movement until you resume it. Recent
   keyboard or mouse activity, or a held modifier key, skips that cycle.
+- **Test now**: run one switch + scroll immediately to check it works with your RDP client, without
+  waiting for the countdown. **Key timing** (Normal / Slow) adapts to laggy connections.
 - Per-user settings, optional launch at sign-in (off by default), a per-user installer that needs no
   admin rights, and a portable exe.
 
@@ -50,7 +52,10 @@ Requires Windows 10 or 11 (x64). Python is **not** required.
    **Pick by clicking it** and click inside the RDP window.
 3. On the **Keys** tab set **Open apps** to the number of apps open *inside the remote session*
    (the number you would see in its Alt+Tab list).
-4. Press **▶ Start**, then **click inside the RDP window** and leave it.
+4. Check it: on the **Keys** tab press **Test now**, click inside the RDP window and keep still.
+   Within a couple of seconds the remote session should switch to another app and scroll. The result
+   is shown in the status line and on the **Log** tab.
+5. Press **▶ Start**, then **click inside the RDP window** and leave it.
    The countdown starts once the RDP window is the active window.
 
 RDP Nexus never brings the RDP window to the front by itself. If you switch to a local app, it
@@ -73,12 +78,22 @@ Scroll: Page Down/Page Up or Arrow Down/Up (or Off), with direction **Down**, **
 (it flips after each successful cycle).
 
 **Shuffle apps** models the remote Alt+Tab list, which Windows keeps in most-recently-used order.
-To bring up the app *k* places down that list it holds Alt, presses Page Up *k* times (*k* ≥ 1), then
-releases Alt, all as a single atomic input. Each round visits every app once in a fresh random order.
+To bring up the app *k* places down that list it holds Alt, taps Page Up *k* times (*k* ≥ 1), then
+releases Alt, the way a person would. Each round visits every app once in a fresh random order.
 It never starts a round on the app that is already active, so no app ever repeats back-to-back.
 RDP Nexus **cannot see inside the remote screen** (RDP only sends pictures), so it can't count your
 apps itself. Keep **Open apps** accurate. If you set it higher than the real number, Alt+Tab wraps
 around and a switch can land back on the current app.
+
+**Key timing.** Keys are pressed one at a time with human-like timing. Version 1.0.0 sent each shortcut as
+one zero-delay burst, and app switching did nothing in a real windowed Remote Desktop Connection session.
+The likely cause is that the client only turns Alt+Page Up into a remote Alt+Tab while it still sees Alt
+held, and after a burst Alt is already released. If switching still fails, try **Slow**.
+
+| Timing | Alt held before first tap | Each tap held | Between taps | Alt held after last tap |
+| --- | --- | --- | --- | --- |
+| Normal | 80 ms | 50 ms | 150 ms | 150 ms |
+| Slow | 150 ms | 90 ms | 300 ms | 300 ms |
 
 ### Pointer movement
 
@@ -101,8 +116,8 @@ around and a switch can land back on the current app.
 | Explicit target | Only top-level windows of `mstsc.exe` / `msrdc.exe` with an RDP session window class (`TscShellContainerClass`, `RAIL_WINDOW`) are accepted. The connection dialog and every other window are rejected. |
 | Identity re-check | Before every action the stored window handle is re-verified (same process and class), so a recycled handle can never redirect input. |
 | Full validation before each action | The window must exist, be responding, visible (not minimized or cloaked on another virtual desktop), have no dialog open and the session's input window present ("connected"), **and be the foreground window**. The workstation must be unlocked with no screen saver running, no modifier key or mouse button held, and no recent user input (10 s). |
-| Last-moment check + atomic send | The foreground is checked again immediately before `SendInput`, and the whole chord goes in **one** `SendInput` call. Windows guarantees those events aren't interleaved with other input. |
-| Post-delivery check | If focus changed during the send, automation suspends. |
+| Per-key checks | Before **every single key event** the RDP window must still be the foreground window, no new user input may have arrived and no other key or mouse button may be held. If anything changes mid-shortcut, every key RDP Nexus is holding is released at once and the shortcut is abandoned. |
+| Post-delivery check | If focus changed during or right after a shortcut, automation suspends. |
 | Fail closed | Any failure (detection hook not responding, a send blocked by Windows, an unexpected error) disables the affected feature rather than retrying blindly. |
 | No hidden channels | RDP Nexus never posts window messages to other apps, never steals focus and never runs in the background without its panel or tray icon. |
 
@@ -123,7 +138,7 @@ Uninstalling removes the program, shortcuts, the startup entry and the logs. You
 | --- | --- |
 | Always **RDP Unavailable – not the active window** | Click inside the RDP window after pressing Start. RDP Nexus itself is a local window, so clicking it takes focus away from RDP. |
 | RDP window isn't in the list | Make sure it's connected (not just the "Remote Desktop Connection" dialog) and press ⟳. Only `mstsc.exe`/`msrdc.exe` session windows are supported. |
-| App switching does nothing | Check *Local Resources → Keyboard → Apply Windows key combinations* in the RDP client, and that the session has more than one app open. Alt+Page Up/Down are handled by the RDP client. |
+| App switching does nothing | Use **Keys → Test now** and read the **Log** tab. If it says *Switched remote app* but nothing changed: set **Options → Key timing → Slow**; check that more than one app is open in the session and that **Open apps** matches. Check that pressing Alt+Page Up by hand inside the RDP window switches apps (it depends on *Local Resources → Keyboard* in the RDP client). |
 | "Blocked by Windows" | The RDP client runs as administrator and RDP Nexus doesn't. Windows blocks input from lower-integrity apps (UIPI), so run both at the same level. |
 | Pointer stays on *Arming* | Rest the pointer over the remote desktop (not over the RDP title bar or RDP Nexus) for 3 seconds. |
 | Pointer keeps switching to *Manual control* | Something is moving the mouse: you, a touchpad, another tool, or the remote side moving the cursor. That's by design, to fail safe. |
@@ -134,10 +149,12 @@ Uninstalling removes the program, shortcuts, the startup entry and the logs. You
 
 - **No guarantee against a race at the instant of sending.** Windows has no API that delivers keyboard
   input to one particular window while still behaving like real typing. `SendInput` goes to whatever
-  window is in the foreground at the moment Windows processes it. RDP Nexus validates, re-checks,
-  sends atomically and verifies afterwards, which narrows the risk window to microseconds but can't
-  make it zero. If focus changes within that sliver, one chord could reach the newly focused window.
-  The keys are chosen to be harmless locally (no Win key, no Alt+Tab), and automation suspends.
+  window is in the foreground at the moment Windows processes it. RDP Nexus re-checks the foreground
+  before every key event, which narrows the risk window to microseconds per key but can't make it zero.
+  Shortcuts are paced (the RDP client needs it), so a shortcut is not one atomic input. If focus
+  changes partway through, RDP Nexus releases the keys it holds; that key-up (for example Alt) reaches
+  the newly focused window, which is harmless. The keys are chosen to be harmless locally (no Win key,
+  no Alt+Tab), and automation suspends.
 - **Manual-movement detection** relies on a low-level mouse hook plus cursor polling. Input injected
   by other software counts as "manual" too, which is the safe direction. If Windows silently removes
   the hook, the next glide notices the hook stopped seeing events and disables pointer movement.
@@ -146,8 +163,9 @@ Uninstalling removes the program, shortcuts, the startup entry and the logs. You
   unavailable. A frozen-but-open session may still look connected.
 - **Shuffle apps** can't see the remote screen. It relies on **Open apps** being accurate and on
   nobody else switching apps in between (a mismatch still never re-selects the current app, provided
-  the count isn't too high). Each switch presses Page Up *k* times within one Alt hold
-  (*k* ≤ Open apps − 1). That's the only way to reach a specific app, and it's sent as one atomic input.
+  the count isn't too high). Each switch taps Page Up *k* times within one Alt hold
+  (*k* ≤ Open apps − 1), which is the only way to reach a specific app. With many apps open this takes
+  a few seconds (about 0.2 s per tap with Normal timing).
 - Shortcut behaviour depends on the RDP client's keyboard settings and on the remote app.
   RemoteApp (`RAIL_WINDOW`) targets work for scrolling and pointer movement, but switching apps there
   moves local focus to another RemoteApp window and so suspends automation.

@@ -22,7 +22,7 @@ import app_info
 import autostart
 import winapi as w
 from keyboard_navigation import (
-    MAX_APPS, MIN_APPS, MODE_SWITCH_OPTIONS, MODES, REMOTE_APP, SCROLL_DIRECTIONS, SCROLL_KEYS, SHUFFLE_APPS,
+    KEY_TIMINGS, MAX_APPS, MIN_APPS, MODE_SWITCH_OPTIONS, MODES, SCROLL_DIRECTIONS, SCROLL_KEYS, SHUFFLE_APPS,
     SWITCH_SHORTCUTS,
 )
 from scheduler import AutomationEngine, DisplayState, EngineConfig, PointerState, Snapshot
@@ -415,6 +415,16 @@ class NexusPanel(ctk.CTk):
                                    lambda v: self._apply(interval_minutes=v), fmt=lambda v: f"{v:g}",
                                    cast=lambda v: round(float(v), 1))
         self.st_interval.pack(side="left")
+        row = self._row(k, "Check it")
+        self.btn_test = ctk.CTkButton(row, text="Test now", font=self.f_small, height=28, width=110,
+                                      corner_radius=8, fg_color=C["accent"], hover_color=C["accent_hover"],
+                                      text_color="#FFFFFF", command=self.test_now)
+        self.btn_test.pack(side="left")
+        ctk.CTkLabel(row, text="then click into the RDP window", font=self.f_small,
+                     text_color=C["faint"]).pack(side="left", padx=(8, 0))
+        Tooltip(self.btn_test, "Runs one switch + scroll right away (no 13-minute wait): press it, click inside "
+                               "the RDP window within 15 s and keep still. The result appears in the status line "
+                               "and the Log tab.")
 
         # --- Pointer ------------------------------------------------------------------
         p = tabs.add("Pointer")
@@ -452,6 +462,10 @@ class NexusPanel(ctk.CTk):
                                           "losing focus, being minimized or disconnecting.")
         self.seg_policy = self._segmented(row, ["Resume", "Wait for me"], self._on_policy, width=230)
         self.seg_policy.pack(side="left")
+        row = self._row(o, "Key timing", "How fast keys are pressed inside the RDP window. Use Slow if app "
+                                         "switching is unreliable on a laggy connection.")
+        self.seg_timing = self._segmented(row, list(KEY_TIMINGS.values()), self._on_timing, width=230)
+        self.seg_timing.pack(side="left")
         row = self._row(o, "Startup")
         self.sw_startup = self._switch(row, "Launch when I sign in", self._on_startup)
         self.sw_startup.pack(side="left")
@@ -486,6 +500,7 @@ class NexusPanel(ctk.CTk):
         self.scroll_menu.set(SCROLL_KEYS[s.scroll_key][0])
         self.seg_dir.set(SCROLL_DIRECTIONS[s.scroll_direction])
         self.seg_policy.set("Resume" if s.resume_policy == "auto" else "Wait for me")
+        self.seg_timing.set(KEY_TIMINGS[s.key_timing])
         self.sl_range.set(s.pointer_range_px)
         self.range_lbl.configure(text=f"{s.pointer_range_px} px")
         self.st_apps.set(s.app_count)
@@ -549,6 +564,13 @@ class NexusPanel(ctk.CTk):
 
     def _on_policy(self, label):
         self._apply(resume_policy="auto" if label == "Resume" else "manual")
+
+    def _on_timing(self, label):
+        self._apply(key_timing=next(k for k, v in KEY_TIMINGS.items() if v == label))
+
+    def test_now(self):
+        if self.engine.test_now():
+            self._flash_detail("Test: click inside the RDP window now and keep still…")
 
     def _on_startup(self):
         want = bool(self.sw_startup.get())
@@ -792,6 +814,10 @@ class NexusPanel(ctk.CTk):
         elif self.ptr_chip.winfo_ismapped():
             self.ptr_chip.pack_forget()
         self.ptr_chip_tip.text = chip_tip
+
+        testing = self.engine.testing
+        self._set(self.btn_test, text="Testing…" if testing else "Test now",
+                  state="disabled" if testing else "normal")
 
         # Target tab
         st = snap.target_status

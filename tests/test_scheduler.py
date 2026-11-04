@@ -63,7 +63,9 @@ class FakeKeyboard:
         self.sent = []
         self.next_result = None
 
-    def send_chord(self, target, keys, guard, repeat=1):
+    def send_chord(self, target, keys, guard, repeat=1, pacing=None, cancel=None):
+        self.last_pacing = pacing
+        self.last_guard = guard
         if self.next_result is not None:
             r, self.next_result = self.next_result, None
             return r
@@ -422,3 +424,88 @@ def test_pause_disarms_pointer(env):
     eng.stop()
     eng.step()
     assert not mon.running  # hook removed when stopped
+
+
+# --- Test now ---------------------------------------------------------------------------
+
+
+def test_test_now_requires_target(env):
+    eng, *_ = env
+    assert not eng.test_now()
+
+
+def test_test_now_runs_one_cycle_without_starting(env):
+    eng, clock, insp, gate, kb, *_ = env
+    eng.set_target(TARGET)
+    assert eng.test_now()
+    eng.step()
+    assert kb.sent == [(("alt", "pageup"), 1), (("pagedown",), 1)]
+    assert kb.last_guard == 1.0  # short idle guard for a user-initiated test
+    snap = eng.snapshot()
+    assert snap.state == DisplayState.STOPPED and not eng.testing
+    run_for(eng, clock, 3000)
+    assert len(kb.sent) == 2  # one-shot
+
+
+def test_test_now_waits_for_focus_and_stillness(env):
+    eng, clock, insp, gate, kb, *_ = env
+    eng.set_target(TARGET)
+    insp.code = NOT_FOREGROUND
+    eng.test_now()
+    run_for(eng, clock, 5)
+    assert kb.sent == [] and "Test waiting" in eng.snapshot().detail
+    insp.code = OK
+    gate.mark_user_activity()  # the click into the RDP window
+    eng.step()
+    assert kb.sent == [] and "keep still" in eng.snapshot().detail
+    run_for(eng, clock, 2)
+    assert len(kb.sent) == 2
+
+
+def test_test_now_times_out(env):
+    eng, clock, insp, gate, kb, *_ = env
+    eng.set_target(TARGET)
+    insp.code = NOT_FOREGROUND
+    eng.test_now()
+    run_for(eng, clock, 16)
+    assert not eng.testing and "cancelled" in eng.snapshot().detail
+    insp.code = OK
+    run_for(eng, clock, 5)
+    assert kb.sent == []
+
+
+def test_stop_cancels_pending_test(env):
+    eng, clock, insp, gate, kb, *_ = env
+    eng.set_target(TARGET)
+    insp.code = NOT_FOREGROUND
+    eng.test_now()
+    eng.stop()
+    insp.code = OK
+    run_for(eng, clock, 5)
+    assert kb.sent == [] and not eng.testing
+
+
+def test_slow_key_timing_is_passed_to_keyboard(env):
+    from keyboard_navigation import PACING
+    eng, clock, insp, gate, kb, *_ = env
+    eng.set_config(EngineConfig(**{**CFG.__dict__, "key_timing": "slow"}))
+    eng.set_target(TARGET)
+    eng.test_now()
+    eng.step()
+    assert kb.last_pacing == PACING["slow"]
+
+
+def test_testing_flag_stays_set_while_test_keys_are_sent(env):
+    eng, clock, insp, gate, kb, *_ = env
+    seen = []
+    original = kb.send_chord
+
+    def spy(*args, **kwargs):
+        seen.append(eng.testing)
+        return original(*args, **kwargs)
+
+    kb.send_chord = spy
+    eng.set_target(TARGET)
+    eng.test_now()
+    eng.step()
+    assert seen == [True, True] and not eng.testing

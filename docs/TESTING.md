@@ -24,7 +24,8 @@ set RDPNEXUS_INTERACTIVE_TESTS=1
 `TscShellContainerClass` and `IHWindowClass`, plus a stand-in local app. Both log every key, mouse move
 and click they receive. The real engine then sends real `SendInput` events. Checked:
 
-- exact key sequences reach only the RDP window, and none reach the local window;
+- exact key sequences reach only the RDP window, paced like a person (Alt held before and after the Page Up taps), and none reach the local window;
+- a focus change in the middle of a shortcut releases Alt at once (nothing stuck), and Test now sends exactly one cycle;
 - switching to the local app suspends automation, and returning restarts the countdown from the full interval;
 - nothing is sent when a local app is active from the start;
 - minimize, an owned dialog and a hidden input window (disconnect) each suspend automation; closing the window stops it;
@@ -45,7 +46,7 @@ to speed things up. In the remote session open Notepad, Paint and a browser, and
 | 2 | Drag the panel, expand/collapse it, toggle Always on top | Responsive, position remembered after restart |
 | 3 | Start → click into RDP → Pause → Resume → Stop | States change instantly; countdown restarts on Resume |
 | 4 | Default interval | 13:00 with fresh settings |
-| 5 | Shuffle apps over 3+ cycles | A different remote app each cycle, never the same twice in a row |
+| 5 | Keys → **Test now**, click into RDP; then Shuffle apps over 3+ cycles | Test switches to another remote app within ~2 s; each cycle a different app, never the same twice in a row (try Options → Key timing → Slow if not) |
 | 6 | Scroll alternate | Page Down, then Page Up, alternating |
 | 7 | Pointer glides | Small moves, only over the remote desktop, no clicks |
 | 8 | Move the mouse | Panel shows *Manual control* at once; no further pointer moves until *Resume pointer* |
