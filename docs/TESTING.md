@@ -43,7 +43,7 @@ to speed things up. In the remote session open Notepad, Paint and a browser, and
 | # | Check | Expected |
 | --- | --- | --- |
 | 1 | Launch from the Start Menu | Panel shows the RDP Nexus icon in the taskbar and the tray |
-| 2 | Drag the panel, expand/collapse it, toggle Always on top | Responsive, position remembered after restart |
+| 2 | Drag the panel, expand/collapse it, toggle Always on top, press — | Responsive, position remembered after restart; — minimizes to the taskbar and the taskbar button restores it |
 | 3 | Start → click into RDP → Pause → Resume → Stop | States change instantly; countdown restarts on Resume |
 | 4 | Default interval | 13:00 with fresh settings |
 | 5 | Keys → **Test now**, click into RDP; then Shuffle apps over 3+ cycles | Test switches to another remote app within ~2 s; each cycle a different app, never the same twice in a row (try Options → Key timing → Slow if not) |
@@ -56,5 +56,5 @@ to speed things up. In the remote session open Notepad, Paint and a browser, and
 | 12 | Switch from RDP to a local app mid-countdown | Suspends immediately; countdown cleared |
 | 13 | Watch for a few cycles | Exactly one switch and one scroll per cycle; no clicks or typing |
 | 14 | Stop, and Exit from the tray while a glide is running | Movement stops immediately; process exits |
-| 15 | Install with "Desktop icon" and "Launch at sign-in", sign out/in, then uninstall from Settings → Apps | Shortcuts and startup entry created, app starts hidden in the tray; uninstall removes them |
+| 15 | Install with "Desktop icon" and "Launch at sign-in", sign out/in, then uninstall from Settings → Apps | Shortcuts and startup entry created, app starts minimized on the taskbar (in the tray if Options → Minimize to = System tray); uninstall removes them |
 | 16 | Push a tag `vX.Y.Z` | The workflow publishes the installer, portable exe and SHA256SUMS.txt |

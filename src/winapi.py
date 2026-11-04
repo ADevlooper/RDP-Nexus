@@ -61,6 +61,10 @@ DESKTOP_READOBJECTS = 0x0001
 
 GWL_STYLE = -16
 GWL_EXSTYLE = -20
+WS_MINIMIZEBOX = 0x00020000
+WS_EX_TOOLWINDOW = 0x00000080
+WS_EX_APPWINDOW = 0x00040000
+SW_MINIMIZE = 6
 
 VK_LBUTTON = 0x01
 VK_RBUTTON = 0x02
@@ -183,6 +187,7 @@ GetUserObjectInformationW = _bind(user32, "GetUserObjectInformationW", wintypes.
 SystemParametersInfoW = _bind(user32, "SystemParametersInfoW", wintypes.BOOL, wintypes.UINT, wintypes.UINT,
                               wintypes.LPVOID, wintypes.UINT)
 GetParent = _bind(user32, "GetParent", wintypes.HWND, wintypes.HWND)
+ShowWindow = _bind(user32, "ShowWindow", wintypes.BOOL, wintypes.HWND, ctypes.c_int)
 MessageBoxW = _bind(user32, "MessageBoxW", ctypes.c_int, wintypes.HWND, wintypes.LPCWSTR, wintypes.LPCWSTR,
                     wintypes.UINT)
 if hasattr(user32, "GetWindowLongPtrW"):

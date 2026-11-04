@@ -66,6 +66,15 @@ class TrayIcon:
             except Exception:
                 pass
 
+    def notify(self, title: str, message: str) -> None:
+        """Windows notification from the tray icon (best effort)."""
+        if self._icon is None:
+            return
+        try:
+            self._icon.notify(message, title)
+        except Exception as exc:
+            log.info("Tray notification unavailable: %s", exc)
+
     def stop(self) -> None:
         if self._icon is not None:
             try:

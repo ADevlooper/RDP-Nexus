@@ -27,8 +27,8 @@ from keyboard_navigation import (
 )
 from scheduler import AutomationEngine, DisplayState, EngineConfig, PointerState, Snapshot
 from settings import (
-    INTERVAL_MAX, INTERVAL_MIN, POINTER_INTERVAL_MAX, POINTER_INTERVAL_MIN, POINTER_RANGE_MAX, POINTER_RANGE_MIN,
-    RESUME_POLICIES, SettingsStore,
+    INTERVAL_MAX, INTERVAL_MIN, MINIMIZE_TARGETS, POINTER_INTERVAL_MAX, POINTER_INTERVAL_MIN, POINTER_RANGE_MAX,
+    POINTER_RANGE_MIN, SettingsStore,
 )
 from system_tray import TrayIcon
 from window_detection import RdpWindow, WindowInspector
@@ -76,8 +76,6 @@ FALLBACK_GLYPH = {
     "minimize": "—", "close": "✕", "refresh": "⟳", "grip": "⋮⋮",
 }
 PLACEHOLDER = "Select RDP window…"
-WS_EX_TOOLWINDOW = 0x00000080
-WS_EX_APPWINDOW = 0x00040000
 DWMWA_WINDOW_CORNER_PREFERENCE = 33
 DWMWA_BORDER_COLOR = 34
 DWMWCP_ROUND = 2
@@ -194,6 +192,8 @@ class NexusPanel(ctk.CTk):
         self._drag = (0, 0)
         self._hwnd = 0
         self._applied: dict[int, dict] = {}
+        self._polls = 0
+        self._tray_hint_shown = False
 
         self.title(app_info.APP_NAME)
         try:
@@ -213,8 +213,8 @@ class NexusPanel(ctk.CTk):
         self.tray = TrayIcon(app_info.APP_NAME, Image.open(app_info.resource_path("assets", "app.png")),
                              self._tray_events)
         self.tray.start()
-        if start_hidden and self.tray.available:
-            self.after(60, self.withdraw)
+        if start_hidden:  # launched at sign-in: start minimized (to the taskbar unless set to tray)
+            self.after(120, self.minimize)
         self.refresh_targets()
         self.after(self.POLL_MS, self._poll)
 
@@ -241,13 +241,20 @@ class NexusPanel(ctk.CTk):
         b.tooltip = Tooltip(b, tip)
         return b
 
+    def _wrapper(self) -> int:
+        """The real top-level HWND (Tk's wrapper around the frameless window)."""
+        return w.hwnd_int(w.GetParent(self.winfo_id())) or self.winfo_id()
+
     def _apply_native_style(self):
-        """Taskbar presence for the frameless window + Windows 11 rounded corners/border."""
+        """Taskbar button for the frameless window (+ minimizable from the taskbar) and
+        Windows 11 rounded corners/border."""
         try:
-            hwnd = w.hwnd_int(w.GetParent(self.winfo_id())) or self.winfo_id()
+            hwnd = self._wrapper()
             self._hwnd = hwnd
             ex = w.GetWindowLongPtrW(hwnd, w.GWL_EXSTYLE)
-            w.SetWindowLongPtrW(hwnd, w.GWL_EXSTYLE, (ex & ~WS_EX_TOOLWINDOW) | WS_EX_APPWINDOW)
+            w.SetWindowLongPtrW(hwnd, w.GWL_EXSTYLE, (ex & ~w.WS_EX_TOOLWINDOW) | w.WS_EX_APPWINDOW)
+            style = w.GetWindowLongPtrW(hwnd, w.GWL_STYLE)
+            w.SetWindowLongPtrW(hwnd, w.GWL_STYLE, style | w.WS_MINIMIZEBOX)
             pref = ctypes.c_int(DWMWCP_ROUND)
             w.DwmSetWindowAttribute(hwnd, DWMWA_WINDOW_CORNER_PREFERENCE, ctypes.byref(pref), 4)
             border = ctypes.c_uint(0x003D322D)  # COLORREF (0x00BBGGRR) of C["border"]
@@ -288,7 +295,7 @@ class NexusPanel(ctk.CTk):
         right = ctk.CTkFrame(bar, fg_color="transparent")
         right.pack(side="right")
         self.btn_close = self._icon_button(right, "close", self.quit_app, "Exit RDP Nexus")
-        self.btn_tray = self._icon_button(right, "minimize", self.hide_to_tray, "Minimize to system tray")
+        self.btn_tray = self._icon_button(right, "minimize", self.minimize, "Minimize")
         self.btn_expand = self._icon_button(right, "down", self.toggle_expanded, "Show settings")
         sep = ctk.CTkFrame(right, fg_color=C["border"], width=1, height=20)
         self.btn_ptr = self._icon_button(right, "mouse", self.toggle_pointer, "Gentle pointer movement on/off")
@@ -466,6 +473,11 @@ class NexusPanel(ctk.CTk):
                                          "switching is unreliable on a laggy connection.")
         self.seg_timing = self._segmented(row, list(KEY_TIMINGS.values()), self._on_timing, width=230)
         self.seg_timing.pack(side="left")
+        row = self._row(o, "Minimize to", "Where the — button (and launch at sign-in) puts the panel. "
+                                          "Automation keeps running either way.")
+        self.seg_minimize = self._segmented(row, list(MINIMIZE_TARGETS.values()), self._on_minimize_target,
+                                            width=230)
+        self.seg_minimize.pack(side="left")
         row = self._row(o, "Startup")
         self.sw_startup = self._switch(row, "Launch when I sign in", self._on_startup)
         self.sw_startup.pack(side="left")
@@ -501,6 +513,8 @@ class NexusPanel(ctk.CTk):
         self.seg_dir.set(SCROLL_DIRECTIONS[s.scroll_direction])
         self.seg_policy.set("Resume" if s.resume_policy == "auto" else "Wait for me")
         self.seg_timing.set(KEY_TIMINGS[s.key_timing])
+        self.seg_minimize.set(MINIMIZE_TARGETS[s.minimize_to])
+        self._update_minimize_tip()
         self.sl_range.set(s.pointer_range_px)
         self.range_lbl.configure(text=f"{s.pointer_range_px} px")
         self.st_apps.set(s.app_count)
@@ -564,6 +578,14 @@ class NexusPanel(ctk.CTk):
 
     def _on_policy(self, label):
         self._apply(resume_policy="auto" if label == "Resume" else "manual")
+
+    def _on_minimize_target(self, label):
+        self._apply(minimize_to=next(k for k, v in MINIMIZE_TARGETS.items() if v == label))
+        self._update_minimize_tip()
+
+    def _update_minimize_tip(self):
+        self.btn_tray.tooltip.text = ("Hide to the system tray (click ^ next to the clock to find the icon)"
+                                      if self.settings.minimize_to == "tray" else "Minimize to the taskbar")
 
     def _on_timing(self, label):
         self._apply(key_timing=next(k for k, v in KEY_TIMINGS.items() if v == label))
@@ -667,11 +689,24 @@ class NexusPanel(ctk.CTk):
                 self.tabs.set("Target")
             self.engine.start()
 
-    def hide_to_tray(self):
-        if self.tray.available:
-            self.withdraw()
+    def minimize(self):
+        if self.settings.minimize_to == "tray" and self.tray.available:
+            self.hide_to_tray()
         else:
-            self._flash_detail("System tray is unavailable")
+            self.minimize_to_taskbar()
+
+    def minimize_to_taskbar(self):
+        w.ShowWindow(self._wrapper(), w.SW_MINIMIZE)
+
+    def hide_to_tray(self):
+        if not self.tray.available:
+            self.minimize_to_taskbar()
+            return
+        self.withdraw()
+        if not self._tray_hint_shown:
+            self._tray_hint_shown = True
+            self.tray.notify("RDP Nexus is still running",
+                             "It's in the system tray. If you can't see the icon, click ^ next to the clock.")
 
     def show_window(self):
         self.deiconify()
@@ -736,10 +771,24 @@ class NexusPanel(ctk.CTk):
             self.geometry(f"+{x}+{max(0, self.winfo_screenheight() - h - 60)}")
 
     # ----------------------------------------------------------------- polling
+    def _check_taskbar_style(self):
+        """Safety net: if Tk ever recreates its wrapper window it comes back as a tool
+        window with no taskbar button; detect that and restore the style."""
+        if self.state() != "normal":
+            return
+        hwnd = self._wrapper()
+        ex = w.GetWindowLongPtrW(hwnd, w.GWL_EXSTYLE)
+        if hwnd != self._hwnd or ex & w.WS_EX_TOOLWINDOW or not ex & w.WS_EX_APPWINDOW:
+            log.warning("Taskbar button was lost (window %s -> %s); restoring it", self._hwnd, hwnd)
+            self._apply_native_style()
+
     def _poll(self):
         if self._closing:
             return
         try:
+            self._polls += 1
+            if self._polls % 10 == 0:
+                self._check_taskbar_style()
             self._handle_tray_events()
             self._render(self.engine.snapshot())
         except Exception:

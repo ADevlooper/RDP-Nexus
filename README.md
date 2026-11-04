@@ -14,7 +14,7 @@ the moment the RDP window isn't the active window, and it never touches your loc
 ## Features
 
 - **Compact floating panel**: dark, rounded and draggable, with an optional always-on-top mode and a
-  one-line status. Expand it for settings; minimize it to the system tray.
+  one-line status. Expand it for settings; minimize it to the taskbar (default) or the system tray.
 - **Start / Pause / Resume / Stop**, with a countdown to the next cycle and clear states:
   **Stopped**, **Running**, **Paused**, **RDP Unavailable** and **Manual pointer control**.
 - **Shuffle apps** (default): visits every app open in the remote session in a random order,
@@ -139,6 +139,7 @@ Uninstalling removes the program, shortcuts, the startup entry and the logs. You
 | Always **RDP Unavailable – not the active window** | Click inside the RDP window after pressing Start. RDP Nexus itself is a local window, so clicking it takes focus away from RDP. |
 | RDP window isn't in the list | Make sure it's connected (not just the "Remote Desktop Connection" dialog) and press ⟳. Only `mstsc.exe`/`msrdc.exe` session windows are supported. |
 | App switching does nothing | Use **Keys → Test now** and read the **Log** tab. If it says *Switched remote app* but nothing changed: set **Options → Key timing → Slow**; check that more than one app is open in the session and that **Open apps** matches. Check that pressing Alt+Page Up by hand inside the RDP window switches apps (it depends on *Local Resources → Keyboard* in the RDP client). |
+| RDP Nexus isn't on the taskbar | Check **Options → Minimize to**. With *System tray*, the — button and launch-at-sign-in hide the panel in the tray. Windows 11 puts new tray icons in the hidden overflow, so click **^** next to the clock (drag the icon onto the taskbar to keep it visible). With *Taskbar* (default since 1.0.2) it always keeps a taskbar button. |
 | "Blocked by Windows" | The RDP client runs as administrator and RDP Nexus doesn't. Windows blocks input from lower-integrity apps (UIPI), so run both at the same level. |
 | Pointer stays on *Arming* | Rest the pointer over the remote desktop (not over the RDP title bar or RDP Nexus) for 3 seconds. |
 | Pointer keeps switching to *Manual control* | Something is moving the mouse: you, a touchpad, another tool, or the remote side moving the cursor. That's by design, to fail safe. |

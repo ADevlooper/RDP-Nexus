@@ -27,6 +27,7 @@ INTERVAL_MIN, INTERVAL_MAX = 1.0, 240.0          # minutes
 POINTER_INTERVAL_MIN, POINTER_INTERVAL_MAX = 10, 900  # seconds
 POINTER_RANGE_MIN, POINTER_RANGE_MAX = 4, 150     # pixels
 RESUME_POLICIES = {"auto": "Automatically (fresh countdown)", "manual": "Wait for me to press Resume"}
+MINIMIZE_TARGETS = {"taskbar": "Taskbar", "tray": "System tray"}
 
 
 @dataclass(frozen=True)
@@ -44,6 +45,7 @@ class Settings:
     pointer_range_px: int = 20
     resume_policy: str = "auto"
     key_timing: str = "normal"
+    minimize_to: str = "taskbar"
     always_on_top: bool = True
     expanded: bool = False
     window_x: int | None = None
@@ -104,6 +106,7 @@ def validate(raw: dict) -> Settings:
                               POINTER_RANGE_MAX, int),
         resume_policy=_choice(raw.get("resume_policy"), d.resume_policy, RESUME_POLICIES),
         key_timing=_choice(raw.get("key_timing"), d.key_timing, KEY_TIMINGS),
+        minimize_to=_choice(raw.get("minimize_to"), d.minimize_to, MINIMIZE_TARGETS),
         always_on_top=_flag(raw.get("always_on_top"), d.always_on_top),
         expanded=_flag(raw.get("expanded"), d.expanded),
         window_x=_opt_int(raw.get("window_x")),

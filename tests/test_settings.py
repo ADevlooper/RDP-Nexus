@@ -91,3 +91,9 @@ def test_key_timing_default_and_validation():
     assert DEFAULTS.key_timing == "normal"
     assert validate({"key_timing": "slow"}).key_timing == "slow"
     assert validate({"key_timing": "warp"}).key_timing == "normal"
+
+
+def test_minimize_target_default_and_validation():
+    assert DEFAULTS.minimize_to == "taskbar"
+    assert validate({"minimize_to": "tray"}).minimize_to == "tray"
+    assert validate({"minimize_to": "desktop"}).minimize_to == "taskbar"
