@@ -53,6 +53,8 @@ SM_CXVIRTUALSCREEN = 78
 SM_CYVIRTUALSCREEN = 79
 
 MONITOR_DEFAULTTONULL = 0
+MONITOR_DEFAULTTONEAREST = 2
+WS_CAPTION = 0x00C00000
 PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
 DWMWA_CLOAKED = 14
 SPI_GETSCREENSAVERRUNNING = 0x0072
@@ -127,6 +129,11 @@ class MSLLHOOKSTRUCT(ctypes.Structure):
     ]
 
 
+class MONITORINFO(ctypes.Structure):
+    _fields_ = [("cbSize", wintypes.DWORD), ("rcMonitor", wintypes.RECT), ("rcWork", wintypes.RECT),
+                ("dwFlags", wintypes.DWORD)]
+
+
 class LASTINPUTINFO(ctypes.Structure):
     _fields_ = [("cbSize", wintypes.UINT), ("dwTime", wintypes.DWORD)]
 
@@ -164,6 +171,8 @@ GetWindowRect = _bind(user32, "GetWindowRect", wintypes.BOOL, wintypes.HWND, cty
 ClientToScreen = _bind(user32, "ClientToScreen", wintypes.BOOL, wintypes.HWND, ctypes.POINTER(wintypes.POINT))
 WindowFromPoint = _bind(user32, "WindowFromPoint", wintypes.HWND, wintypes.POINT)
 MonitorFromPoint = _bind(user32, "MonitorFromPoint", HMONITOR, wintypes.POINT, wintypes.DWORD)
+MonitorFromWindow = _bind(user32, "MonitorFromWindow", HMONITOR, wintypes.HWND, wintypes.DWORD)
+GetMonitorInfoW = _bind(user32, "GetMonitorInfoW", wintypes.BOOL, HMONITOR, ctypes.POINTER(MONITORINFO))
 GetCursorPos = _bind(user32, "GetCursorPos", wintypes.BOOL, ctypes.POINTER(wintypes.POINT))
 GetSystemMetrics = _bind(user32, "GetSystemMetrics", ctypes.c_int, ctypes.c_int)
 GetAsyncKeyState = _bind(user32, "GetAsyncKeyState", ctypes.c_short, ctypes.c_int)

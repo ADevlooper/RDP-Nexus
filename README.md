@@ -71,24 +71,35 @@ Each cycle sends **one** switch action, then (after half a second, if the target
 
 | Mode | Switch options | Notes |
 | --- | --- | --- |
-| **Remote apps** | **Shuffle apps** (default), Alt+Page Up (next app), Alt+Page Down (previous app), Off | Alt+Page Up/Down are the Remote Desktop client's own stand-ins for Alt+Tab *inside* the session. RDP Nexus never sends a real Alt+Tab, which would switch your **local** apps in windowed mode. |
+| **Remote apps** | **Shuffle apps** (default), Next app, Previous app, Off | Keys are chosen automatically before every switch (see *Which keys switch remote apps* below). |
 | **Browser tabs** | Ctrl+Tab, Ctrl+Shift+Tab, Ctrl+Page Down, Ctrl+Page Up, Off | Acts on the browser that is active in the remote session. |
 
 Scroll: Page Down/Page Up or Arrow Down/Up (or Off), with direction **Down**, **Up** or **Alternate**
 (it flips after each successful cycle).
 
+**Which keys switch remote apps.** Remote Desktop Connection's *Local Resources → Keyboard → Apply
+Windows key combinations* option (`keyboardhook` in the `.rdp` file) decides where Alt+Tab goes:
+
+| RDP client state | Alt+Tab goes to | RDP Nexus uses |
+| --- | --- | --- |
+| Full screen with the default setting (*Only when using the full screen*), or the setting is *On the remote computer* | the remote PC (Alt+Page Up is passed through and ignored) | **Alt+Tab** / Alt+Shift+Tab |
+| Windowed with the default setting, or the setting is *On this computer* | **your local PC** (never sent) | **Alt+Page Up** / Alt+Page Down, the client's own remote Alt+Tab |
+
+RDP Nexus reads the setting from the `.rdp` file the client was started with, or from
+`Documents\Default.rdp`. It checks whether the window is full screen (no title bar, covers its
+monitor) right before every switch, and the **Target** tab shows the choice and why. If focus ever
+leaves the RDP window right after an Alt+Tab, it suspends and uses Alt+Page Up for that window from then on.
+
 **Shuffle apps** models the remote Alt+Tab list, which Windows keeps in most-recently-used order.
-To bring up the app *k* places down that list it holds Alt, taps Page Up *k* times (*k* ≥ 1), then
-releases Alt, the way a person would. Each round visits every app once in a fresh random order.
+To bring up the app *k* places down that list it holds Alt, taps Tab (or Page Up) *k* times (*k* ≥ 1),
+then releases Alt, the way a person would. Each round visits every app once in a fresh random order.
 It never starts a round on the app that is already active, so no app ever repeats back-to-back.
 RDP Nexus **cannot see inside the remote screen** (RDP only sends pictures), so it can't count your
 apps itself. Keep **Open apps** accurate. If you set it higher than the real number, Alt+Tab wraps
 around and a switch can land back on the current app.
 
-**Key timing.** Keys are pressed one at a time with human-like timing. Version 1.0.0 sent each shortcut as
-one zero-delay burst, and app switching did nothing in a real windowed Remote Desktop Connection session.
-The likely cause is that the client only turns Alt+Page Up into a remote Alt+Tab while it still sees Alt
-held, and after a burst Alt is already released. If switching still fails, try **Slow**.
+**Key timing.** Keys are pressed one at a time with human-like timing, so the RDP client sees Alt held
+while each Tab / Page Up arrives. If switching is unreliable on a slow connection, try **Slow**.
 
 | Timing | Alt held before first tap | Each tap held | Between taps | Alt held after last tap |
 | --- | --- | --- | --- | --- |
@@ -138,7 +149,7 @@ Uninstalling removes the program, shortcuts, the startup entry and the logs. You
 | --- | --- |
 | Always **RDP Unavailable – not the active window** | Click inside the RDP window after pressing Start. RDP Nexus itself is a local window, so clicking it takes focus away from RDP. |
 | RDP window isn't in the list | Make sure it's connected (not just the "Remote Desktop Connection" dialog) and press ⟳. Only `mstsc.exe`/`msrdc.exe` session windows are supported. |
-| App switching does nothing | Use **Keys → Test now** and read the **Log** tab. If it says *Switched remote app* but nothing changed: set **Options → Key timing → Slow**; check that more than one app is open in the session and that **Open apps** matches. Check that pressing Alt+Page Up by hand inside the RDP window switches apps (it depends on *Local Resources → Keyboard* in the RDP client). |
+| App switching does nothing | Update to 1.0.3 or later: earlier versions only sent Alt+Page Up, which a full-screen session ignores. Use **Keys → Test now** and read the **Log** tab and **Target → Keys**. If the log says *Switched remote app* but nothing changed: check that more than one app is open in the session and that **Open apps** matches, then try **Options → Key timing → Slow**. |
 | RDP Nexus isn't on the taskbar | Check **Options → Minimize to**. With *System tray*, the — button and launch-at-sign-in hide the panel in the tray. Windows 11 puts new tray icons in the hidden overflow, so click **^** next to the clock (drag the icon onto the taskbar to keep it visible). With *Taskbar* (default since 1.0.2) it always keeps a taskbar button. |
 | "Blocked by Windows" | The RDP client runs as administrator and RDP Nexus doesn't. Windows blocks input from lower-integrity apps (UIPI), so run both at the same level. |
 | Pointer stays on *Arming* | Rest the pointer over the remote desktop (not over the RDP title bar or RDP Nexus) for 3 seconds. |
@@ -154,8 +165,13 @@ Uninstalling removes the program, shortcuts, the startup entry and the logs. You
   before every key event, which narrows the risk window to microseconds per key but can't make it zero.
   Shortcuts are paced (the RDP client needs it), so a shortcut is not one atomic input. If focus
   changes partway through, RDP Nexus releases the keys it holds; that key-up (for example Alt) reaches
-  the newly focused window, which is harmless. The keys are chosen to be harmless locally (no Win key,
-  no Alt+Tab), and automation suspends.
+  the newly focused window, which is harmless. The keys are chosen to be harmless locally (no Win key),
+  and automation suspends.
+- **Alt+Tab is sent only when the RDP client forwards it** (full screen with the default keyboard setting,
+  or *On the remote computer*). That decision relies on the `.rdp` file the client was started with
+  (or `Default.rdp`). If you change the keyboard option in the connection dialog without saving it, the
+  file may be out of date. The safety net is the focus check after every switch: if Alt+Tab ever
+  switched a local app, RDP Nexus suspends and never uses Alt+Tab for that window again.
 - **Manual-movement detection** relies on a low-level mouse hook plus cursor polling. Input injected
   by other software counts as "manual" too, which is the safe direction. If Windows silently removes
   the hook, the next glide notices the hook stopped seeing events and disables pointer movement.
@@ -164,14 +180,17 @@ Uninstalling removes the program, shortcuts, the startup entry and the logs. You
   unavailable. A frozen-but-open session may still look connected.
 - **Shuffle apps** can't see the remote screen. It relies on **Open apps** being accurate and on
   nobody else switching apps in between (a mismatch still never re-selects the current app, provided
-  the count isn't too high). Each switch taps Page Up *k* times within one Alt hold
+  the count isn't too high). Each switch taps Tab or Page Up *k* times within one Alt hold
   (*k* ≤ Open apps − 1), which is the only way to reach a specific app. With many apps open this takes
   a few seconds (about 0.2 s per tap with Normal timing).
 - Shortcut behaviour depends on the RDP client's keyboard settings and on the remote app.
   RemoteApp (`RAIL_WINDOW`) targets work for scrolling and pointer movement, but switching apps there
   moves local focus to another RemoteApp window and so suspends automation.
 - Microsoft Remote Desktop / Windows App (`msrdc.exe`) is assumed to use the same session window
-  class as `mstsc.exe`; this was not verified with a live `msrdc` session.
+  class and keyboard defaults as `mstsc.exe`; this was not verified with a live `msrdc` session.
+- Verified live (1.0.3): a full-screen `mstsc` session with default keyboard settings. Alt+Page Up did
+  nothing there, and Alt+Tab switched the remote app. The windowed path (Alt+Page Up) is based on
+  Microsoft's documented RDP shortcuts but has not yet been confirmed on a live session.
 - Development and automated tests used stand-in windows with mstsc's real window classes. See
   [docs/TESTING.md](docs/TESTING.md) for the checklist to run against a real Remote Desktop session.
 

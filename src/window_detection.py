@@ -308,6 +308,21 @@ class WindowInspector:
             return status(NOT_FOREGROUND)
         return status(OK)
 
+    def is_fullscreen(self, target: RdpWindow) -> bool:
+        """Full-screen RDP session: no title bar and the window covers its whole monitor."""
+        hwnd = target.hwnd
+        if not w.IsWindow(hwnd) or w.IsIconic(hwnd):
+            return False
+        if (w.GetWindowLongPtrW(hwnd, w.GWL_STYLE) & w.WS_CAPTION) == w.WS_CAPTION:
+            return False
+        rect = self.window_rect(hwnd)
+        info = w.MONITORINFO(cbSize=ctypes.sizeof(w.MONITORINFO))
+        monitor = w.MonitorFromWindow(hwnd, w.MONITOR_DEFAULTTONEAREST)
+        if rect is None or not monitor or not w.GetMonitorInfoW(monitor, ctypes.byref(info)):
+            return False
+        m = info.rcMonitor
+        return rect.left <= m.left and rect.top <= m.top and rect.right >= m.right and rect.bottom >= m.bottom
+
     def is_foreground(self, target: RdpWindow) -> bool:
         """Cheapest possible last-moment check, used right before SendInput."""
         return self.foreground_root() == target.hwnd

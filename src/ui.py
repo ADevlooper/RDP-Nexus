@@ -388,6 +388,14 @@ class NexusPanel(ctk.CTk):
         self.conn_lbl = ctk.CTkLabel(row, text="No RDP window selected", font=self.f_small, text_color=C["muted"],
                                      anchor="w", wraplength=260, justify="left")
         self.conn_lbl.pack(side="left", padx=(4, 0), fill="x", expand=True)
+        row = self._row(t, "Keys")
+        self.keys_lbl = ctk.CTkLabel(row, text="—", font=self.f_small, text_color=C["muted"], anchor="w",
+                                     wraplength=260, justify="left")
+        self.keys_lbl.pack(side="left", fill="x", expand=True)
+        Tooltip(self.keys_lbl, "Remote Desktop sends Alt+Tab to the remote PC only in full screen (or when "
+                               "'Apply Windows key combinations' is 'On the remote computer'); otherwise "
+                               "Alt+Page Up is its remote Alt+Tab. RDP Nexus picks the right one before every "
+                               "switch.")
         ctk.CTkLabel(t, text="Automation only acts while this window is the active window and the session is "
                              "visible. It never brings the window forward by itself.",
                      font=self.f_small, text_color=C["faint"], wraplength=380, justify="left",
@@ -880,6 +888,7 @@ class NexusPanel(ctk.CTk):
             if self._pick_deadline is None:
                 kind = f"{snap.target.kind} · " if snap.target else ""
                 self._set(self.conn_lbl, text=f"{kind}{st.message}")
+        self._set(self.keys_lbl, text=snap.switch_note.replace("App switching: ", "") or "—")
         locked = snap.state in (DisplayState.RUNNING, DisplayState.UNAVAILABLE)
         for widget in (self.target_menu, self.btn_refresh, self.btn_pick):
             self._set(widget, state="disabled" if locked else "normal")

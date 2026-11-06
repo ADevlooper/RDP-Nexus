@@ -31,6 +31,10 @@ class Clock:
 class FakeInspector:
     def __init__(self):
         self.code = OK
+        self.fullscreen = False
+
+    def is_fullscreen(self, target):
+        return self.fullscreen
 
     def check(self, target, require_foreground=True):
         if target is None:
@@ -56,6 +60,15 @@ class FakeGate:
 
     def mark_user_activity(self):
         self.last_activity = self.clock()
+
+
+class FakeRdpKeys:
+    def __init__(self, mode=2):
+        self.mode = mode
+
+    def lookup(self, pid, process_name):
+        from rdp_settings import KeyboardHookInfo
+        return KeyboardHookInfo(self.mode, "test")
 
 
 class FakeKeyboard:
@@ -132,7 +145,8 @@ def env():
     kb = FakeKeyboard()
     mon = FakeMonitor()
     ptr = FakePointer(mon)
-    eng = AutomationEngine(insp, gate, kb, ptr, mon, CFG, clock=clock, cursor=ptr._cursor, start_thread=False)
+    eng = AutomationEngine(insp, gate, kb, ptr, mon, CFG, clock=clock, cursor=ptr._cursor, start_thread=False,
+                           rdp_keys=FakeRdpKeys())
     return eng, clock, insp, gate, kb, mon, ptr
 
 
@@ -267,7 +281,8 @@ def test_only_one_worker_thread():
     from scheduler import AutomationEngine as AE
     clock = Clock()
     mon = FakeMonitor()
-    eng = AE(FakeInspector(), FakeGate(clock), FakeKeyboard(), FakePointer(mon), mon, CFG, tick_s=0.01)
+    eng = AE(FakeInspector(), FakeGate(clock), FakeKeyboard(), FakePointer(mon), mon, CFG, tick_s=0.01,
+             rdp_keys=FakeRdpKeys())
     try:
         eng.set_target(TARGET)
         for _ in range(5):
@@ -509,3 +524,63 @@ def test_testing_flag_stays_set_while_test_keys_are_sent(env):
     eng.test_now()
     eng.step()
     assert seen == [True, True] and not eng.testing
+
+
+# --- which keys switch remote apps -----------------------------------------------------
+
+
+def _one_test_cycle(env, switch="alt_pageup", mode=2, fullscreen=False):
+    eng, clock, insp, gate, kb, *_ = env
+    eng.rdp_keys = FakeRdpKeys(mode)
+    insp.fullscreen = fullscreen
+    eng.set_config(EngineConfig(**{**CFG.__dict__, "switch_shortcut": switch, "scroll_key": "off"}))
+    eng.set_target(TARGET)
+    eng.test_now()
+    eng.step()
+    return kb.sent
+
+
+def test_fullscreen_default_setting_uses_alt_tab(env):
+    assert _one_test_cycle(env, fullscreen=True) == [(("alt", "tab"), 1)]
+
+
+def test_fullscreen_previous_app_uses_alt_shift_tab(env):
+    assert _one_test_cycle(env, "alt_pagedown", fullscreen=True) == [(("alt", "shift", "tab"), 1)]
+
+
+def test_windowed_default_setting_uses_alt_pageup(env):
+    assert _one_test_cycle(env, fullscreen=False) == [(("alt", "pageup"), 1)]
+
+
+def test_setting_on_this_computer_never_uses_alt_tab(env):
+    assert _one_test_cycle(env, mode=0, fullscreen=True) == [(("alt", "pageup"), 1)]
+
+
+def test_setting_on_remote_computer_uses_alt_tab_even_windowed(env):
+    assert _one_test_cycle(env, mode=1, fullscreen=False) == [(("alt", "tab"), 1)]
+
+
+def test_shuffle_fullscreen_taps_tab(env):
+    eng, clock, insp, gate, kb, *_ = env
+    insp.fullscreen = True
+    eng.set_config(EngineConfig(interval_s=60, switch_shortcut=SHUFFLE_APPS, app_count=4, scroll_key="off",
+                                pointer_enabled=False))
+    eng.set_target(TARGET)
+    eng.start()
+    run_for(eng, clock, 60 * 6 + 5)
+    assert len(kb.sent) == 6 and all(k == ("alt", "tab") and 1 <= rep <= 3 for k, rep in kb.sent)
+    assert "full-screen RDP passes Alt+Tab" in eng.snapshot().events[-1].message
+
+
+def test_alt_tab_falls_back_after_focus_moves(env):
+    eng, clock, insp, gate, kb, *_ = env
+    insp.fullscreen = True
+    eng.set_target(TARGET)
+    eng.set_config(EngineConfig(**{**CFG.__dict__, "scroll_key": "off"}))
+    kb.next_result = ActionResult(False, "focus_changed", "Focus left the RDP window right after Alt+Tab")
+    eng.test_now()
+    eng.step()
+    assert any("will use Alt+Page Up" in e.message for e in eng.snapshot().events)
+    eng.test_now()
+    eng.step()
+    assert kb.sent[-1] == (("alt", "pageup"), 1)

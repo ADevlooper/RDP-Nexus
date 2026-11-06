@@ -27,10 +27,11 @@ from enum import Enum
 
 from input_safety import SafetyGate
 from keyboard_navigation import (
-    PACING, SHUFFLE_APPS, SWITCH_SHORTCUTS, ActionResult, AppShuffler, KeyboardNavigator, chord_text,
-    scroll_key_for,
+    PACING, REMOTE_APP_SWITCHES, SHUFFLE_APPS, SWITCH_SHORTCUTS, ActionResult, AppShuffler, KeyboardNavigator,
+    chord_text, remote_app_keys, scroll_key_for,
 )
 from pointer_controller import ManualMovementMonitor, PointerController
+from rdp_settings import HOOK_FULLSCREEN, HOOK_REMOTE, RdpKeyboardSettings, windows_keys_go_remote
 from settings import Settings
 from window_detection import CLOSED, REPLACED, RdpWindow, TargetStatus, WindowInspector
 
@@ -117,6 +118,7 @@ class Snapshot:
     target_status: TargetStatus | None
     cycles: int
     events: tuple[LogEntry, ...]
+    switch_note: str = ""
 
 
 _TERMINAL_TARGET_CODES = {CLOSED, REPLACED}
@@ -126,8 +128,12 @@ class AutomationEngine:
     def __init__(self, inspector: WindowInspector, gate: SafetyGate, keyboard: KeyboardNavigator,
                  pointer: PointerController, monitor: ManualMovementMonitor,
                  config: EngineConfig | None = None, clock=time.monotonic, cursor=None,
-                 tick_s: float = 0.1, start_thread: bool = True):
+                 tick_s: float = 0.1, start_thread: bool = True, rdp_keys: RdpKeyboardSettings | None = None):
         self.inspector = inspector
+        self.rdp_keys = rdp_keys or RdpKeyboardSettings()
+        # RDP windows where Alt+Tab was seen reaching the local computer: never use Alt+Tab there again.
+        self._alt_tab_unsafe: set[int] = set()
+        self._switch_note = ""
         self.gate = gate
         self.keyboard = keyboard
         self.pointer = pointer
@@ -334,6 +340,7 @@ class AutomationEngine:
                 target_status=self._target_status,
                 cycles=self._cycles,
                 events=tuple(list(self._events)[-40:]),
+                switch_note=self._switch_note,
             )
 
     def shutdown(self) -> None:
@@ -406,8 +413,14 @@ class AutomationEngine:
         with self._lock:
             run, cfg, target = self._run, self._cfg, self._target
         st = self.inspector.check(target, require_foreground=True) if target is not None else None
+        note = ""
+        if target is not None and cfg.switch_shortcut in REMOTE_APP_SWITCHES and st is not None \
+                and st.code not in _TERMINAL_TARGET_CODES:
+            keys, why = self._remote_switch(target, cfg.switch_shortcut)
+            note = f"App switching: {chord_text(keys)} ({why})"
         with self._lock:
             self._target_status = st
+            self._switch_note = note
         self._manage_hook(run, cfg)
         if self._test_until is not None:
             self._run_test(target, cfg, st)
@@ -569,6 +582,22 @@ class AutomationEngine:
         with self._lock:
             self._log("info" if sent else "warning", "Test finished" if sent else "Test sent nothing (see above)")
 
+    def _remote_switch(self, target: RdpWindow, switch_id: str) -> tuple[tuple[str, ...], str]:
+        """Pick the app-switch keys the RDP client will actually forward to the remote session."""
+        info = self.rdp_keys.lookup(target.pid, target.process_name)
+        fullscreen = self.inspector.is_fullscreen(target)
+        remote = windows_keys_go_remote(info.mode, fullscreen) and target.hwnd not in self._alt_tab_unsafe
+        if remote:
+            why = ("full-screen RDP passes Alt+Tab to the remote PC" if info.mode == HOOK_FULLSCREEN
+                   else "RDP set to apply Windows key combinations on the remote computer")
+        elif target.hwnd in self._alt_tab_unsafe:
+            why = "Alt+Tab reached this computer earlier, so Alt+Page Up is used"
+        elif info.mode == HOOK_REMOTE or info.mode == HOOK_FULLSCREEN:
+            why = "windowed RDP: Alt+Page Up is its remote Alt+Tab"
+        else:
+            why = "RDP keeps Windows key combinations on this computer: Alt+Page Up is its remote Alt+Tab"
+        return remote_app_keys(switch_id, remote), why
+
     def _keyboard_cycle(self, target: RdpWindow, cfg: EngineConfig, cancel: threading.Event | None = None) -> bool:
         cancel = cancel or self._cancel
         pacing = PACING.get(cfg.key_timing, PACING["normal"])
@@ -578,20 +607,27 @@ class AutomationEngine:
             if switch.keys:
                 if cancel.is_set():
                     return sent_any
-                if switch.id == SHUFFLE_APPS:
-                    shuffler = self._shuffler_for(cfg)
+                keys, why = switch.keys, ""
+                if switch.id in REMOTE_APP_SWITCHES:
+                    keys, why = self._remote_switch(target, switch.id)
+                steps = 1
+                shuffler = self._shuffler_for(cfg) if switch.id == SHUFFLE_APPS else None
+                if shuffler is not None:
                     _app, steps = shuffler.peek()
-                    r = self.keyboard.send_chord(target, switch.keys, cfg.idle_guard_s, repeat=steps,
-                                                 pacing=pacing, cancel=cancel)
-                    if r.ok:
+                r = self.keyboard.send_chord(target, keys, cfg.idle_guard_s, repeat=steps, pacing=pacing,
+                                             cancel=cancel)
+                if r.ok and switch.id in REMOTE_APP_SWITCHES:
+                    if shuffler is not None:
                         shuffler.commit()
-                        took = r.message.rsplit(" over ", 1)[-1] if " over " in r.message else ""
-                        r = ActionResult(True, "ok", f"Switched remote app with {chord_text(switch.keys, steps)}"
-                                                     f"{' over ' + took if took else ''} "
-                                                     f"(shuffled order of {cfg.app_count})")
-                else:
-                    r = self.keyboard.send_chord(target, switch.keys, cfg.idle_guard_s, pacing=pacing,
-                                                 cancel=cancel)
+                    took = r.message.rsplit(" over ", 1)[-1] if " over " in r.message else ""
+                    order = f"; shuffled order of {cfg.app_count}" if shuffler is not None else ""
+                    r = ActionResult(True, "ok", f"Switched remote app with {chord_text(keys, steps)}"
+                                                 f"{' over ' + took if took else ''} ({why}{order})")
+                elif r.code == "focus_changed" and "tab" in keys and "alt" in keys:
+                    # Alt+Tab may have reached the local computer: never use it for this window again.
+                    self._alt_tab_unsafe.add(target.hwnd)
+                    r = ActionResult(False, r.code, r.message + " — Alt+Tab may have reached this computer, so "
+                                                                "this RDP window will use Alt+Page Up from now on")
                 if not self._record(r):
                     return sent_any
                 sent_any = True

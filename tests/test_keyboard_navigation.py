@@ -19,8 +19,17 @@ def test_only_allow_listed_keys_exist():
 
 def test_no_local_shell_shortcuts():
     for sc in SWITCH_SHORTCUTS.values():
+        # Alt+Tab is never a static shortcut: the engine uses it only when the RDP client forwards it.
         assert not ({"alt", "tab"} <= set(sc.keys)), "Alt+Tab would switch LOCAL apps in windowed RDP"
         assert "win" not in sc.keys
+
+
+def test_remote_app_keys_follow_rdp_keyboard_mode():
+    from keyboard_navigation import remote_app_keys
+    assert remote_app_keys(SHUFFLE_APPS, True) == ("alt", "tab")
+    assert remote_app_keys("alt_pagedown", True) == ("alt", "shift", "tab")
+    assert remote_app_keys(SHUFFLE_APPS, False) == ("alt", "pageup")
+    assert remote_app_keys("alt_pagedown", False) == ("alt", "pagedown")
 
 
 def test_mode_options_reference_existing_shortcuts():

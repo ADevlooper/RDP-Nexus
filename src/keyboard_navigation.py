@@ -63,12 +63,26 @@ SWITCH_SHORTCUTS: dict[str, Shortcut] = {
         Shortcut("ctrl_pageup", "Ctrl+Page Up · previous tab", ("ctrl", "pageup")),
         # Alt+Page Up / Down are the Remote Desktop client's own equivalents of
         # Alt+Tab / Alt+Shift+Tab *inside* the remote session.
+        # Remote-app switching: the keys below are the windowed-mode defaults.  The engine
+        # picks Alt+Tab / Alt+Shift+Tab instead when the RDP client forwards Windows key
+        # combinations to the remote session (see rdp_settings.py).
         Shortcut(SHUFFLE_APPS, "Shuffle apps · random order, no repeats", ("alt", "pageup")),
-        Shortcut("alt_pageup", "Alt+Page Up · next app", ("alt", "pageup")),
-        Shortcut("alt_pagedown", "Alt+Page Down · previous app", ("alt", "pagedown")),
+        Shortcut("alt_pageup", "Next app", ("alt", "pageup")),
+        Shortcut("alt_pagedown", "Previous app", ("alt", "pagedown")),
         Shortcut("off", "Off · no switching", ()),
     )
 }
+
+REMOTE_APP_SWITCHES = frozenset({SHUFFLE_APPS, "alt_pageup", "alt_pagedown"})
+
+
+def remote_app_keys(switch_id: str, windows_keys_go_remote: bool) -> tuple[str, ...]:
+    """Keys that switch apps INSIDE the remote session for the RDP client's current keyboard mode."""
+    previous = switch_id == "alt_pagedown"
+    if windows_keys_go_remote:  # client forwards Alt+Tab itself (e.g. full screen, default settings)
+        return ("alt", "shift", "tab") if previous else ("alt", "tab")
+    return ("alt", "pagedown") if previous else ("alt", "pageup")  # client's own Alt+Tab stand-in
+
 
 MODE_SWITCH_OPTIONS = {
     BROWSER: ("ctrl_tab", "ctrl_shift_tab", "ctrl_pagedown", "ctrl_pageup", "off"),

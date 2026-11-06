@@ -46,7 +46,7 @@ to speed things up. In the remote session open Notepad, Paint and a browser, and
 | 2 | Drag the panel, expand/collapse it, toggle Always on top, press — | Responsive, position remembered after restart; — minimizes to the taskbar and the taskbar button restores it |
 | 3 | Start → click into RDP → Pause → Resume → Stop | States change instantly; countdown restarts on Resume |
 | 4 | Default interval | 13:00 with fresh settings |
-| 5 | Keys → **Test now**, click into RDP; then Shuffle apps over 3+ cycles | Test switches to another remote app within ~2 s; each cycle a different app, never the same twice in a row (try Options → Key timing → Slow if not) |
+| 5 | Keys → **Test now**, click into RDP, in **full screen** and again **windowed** (Ctrl+Alt+Break); then Shuffle apps over 3+ cycles | Target → Keys shows Alt+Tab (full screen) / Alt+Page Up (windowed); Test switches to another remote app within ~2 s in both; each cycle a different app, never the same twice in a row |
 | 6 | Scroll alternate | Page Down, then Page Up, alternating |
 | 7 | Pointer glides | Small moves, only over the remote desktop, no clicks |
 | 8 | Move the mouse | Panel shows *Manual control* at once; no further pointer moves until *Resume pointer* |
