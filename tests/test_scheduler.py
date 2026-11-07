@@ -584,3 +584,20 @@ def test_alt_tab_falls_back_after_focus_moves(env):
     eng.test_now()
     eng.step()
     assert kb.sent[-1] == (("alt", "pageup"), 1)
+
+
+def test_cycle_mode_full_screen_and_windowed(env):
+    from keyboard_navigation import CYCLE_APPS
+    assert _one_test_cycle(env, CYCLE_APPS, fullscreen=True) == [(("alt", "shift", "tab"), 1)]
+    eng = env[0]
+    assert "cycling through all open apps" in eng.snapshot().events[-2].message
+
+
+def test_cycle_mode_windowed_uses_alt_pagedown(env):
+    from keyboard_navigation import CYCLE_APPS
+    assert _one_test_cycle(env, CYCLE_APPS, fullscreen=False) == [(("alt", "pagedown"), 1)]
+
+
+def test_default_engine_switch_is_cycle():
+    from keyboard_navigation import CYCLE_APPS
+    assert EngineConfig().switch_shortcut == CYCLE_APPS

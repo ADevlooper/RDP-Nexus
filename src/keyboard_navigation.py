@@ -53,6 +53,7 @@ REMOTE_APP = "remote_app"
 MODES = {BROWSER: "Browser tabs", REMOTE_APP: "Remote apps"}
 
 SHUFFLE_APPS = "shuffle_apps"
+CYCLE_APPS = "cycle_apps"
 
 SWITCH_SHORTCUTS: dict[str, Shortcut] = {
     s.id: s
@@ -66,19 +67,22 @@ SWITCH_SHORTCUTS: dict[str, Shortcut] = {
         # Remote-app switching: the keys below are the windowed-mode defaults.  The engine
         # picks Alt+Tab / Alt+Shift+Tab instead when the RDP client forwards Windows key
         # combinations to the remote session (see rdp_settings.py).
+        # Cycle: one Alt+Shift+Tab brings forward the app used longest ago, so repeating it visits
+        # every open app in turn (verified live: 4 switches showed 4 different apps).
+        Shortcut(CYCLE_APPS, "Cycle through all apps · in order", ("alt", "pagedown")),
         Shortcut(SHUFFLE_APPS, "Shuffle apps · random order, no repeats", ("alt", "pageup")),
-        Shortcut("alt_pageup", "Next app", ("alt", "pageup")),
-        Shortcut("alt_pagedown", "Previous app", ("alt", "pagedown")),
+        Shortcut("alt_pageup", "Back and forth · last two apps", ("alt", "pageup")),
+        Shortcut("alt_pagedown", "Cycle through all apps · in order (legacy)", ("alt", "pagedown")),
         Shortcut("off", "Off · no switching", ()),
     )
 }
 
-REMOTE_APP_SWITCHES = frozenset({SHUFFLE_APPS, "alt_pageup", "alt_pagedown"})
+REMOTE_APP_SWITCHES = frozenset({CYCLE_APPS, SHUFFLE_APPS, "alt_pageup", "alt_pagedown"})
 
 
 def remote_app_keys(switch_id: str, windows_keys_go_remote: bool) -> tuple[str, ...]:
     """Keys that switch apps INSIDE the remote session for the RDP client's current keyboard mode."""
-    previous = switch_id == "alt_pagedown"
+    previous = switch_id in (CYCLE_APPS, "alt_pagedown")
     if windows_keys_go_remote:  # client forwards Alt+Tab itself (e.g. full screen, default settings)
         return ("alt", "shift", "tab") if previous else ("alt", "tab")
     return ("alt", "pagedown") if previous else ("alt", "pageup")  # client's own Alt+Tab stand-in
@@ -86,9 +90,9 @@ def remote_app_keys(switch_id: str, windows_keys_go_remote: bool) -> tuple[str, 
 
 MODE_SWITCH_OPTIONS = {
     BROWSER: ("ctrl_tab", "ctrl_shift_tab", "ctrl_pagedown", "ctrl_pageup", "off"),
-    REMOTE_APP: (SHUFFLE_APPS, "alt_pageup", "alt_pagedown", "off"),
+    REMOTE_APP: (CYCLE_APPS, SHUFFLE_APPS, "alt_pageup", "off"),
 }
-MODE_DEFAULT_SWITCH = {BROWSER: "ctrl_tab", REMOTE_APP: SHUFFLE_APPS}
+MODE_DEFAULT_SWITCH = {BROWSER: "ctrl_tab", REMOTE_APP: CYCLE_APPS}
 
 SCROLL_KEYS = {  # id -> (label, key for "down", key for "up")
     "page": ("Page Up / Page Down", "pagedown", "pageup"),

@@ -3,14 +3,14 @@ import os
 
 import pytest
 
-from keyboard_navigation import BROWSER, REMOTE_APP, SHUFFLE_APPS
+from keyboard_navigation import BROWSER, CYCLE_APPS, REMOTE_APP, SHUFFLE_APPS
 from settings import DEFAULTS, SettingsStore, validate
 
 
 def test_defaults_match_specification():
     assert DEFAULTS.interval_minutes == 13.0
     assert DEFAULTS.mode == REMOTE_APP
-    assert DEFAULTS.switch_shortcut == SHUFFLE_APPS
+    assert DEFAULTS.switch_shortcut == CYCLE_APPS
     assert DEFAULTS.keyboard_enabled is True
     assert DEFAULTS.resume_policy == "auto"
 
@@ -41,7 +41,7 @@ def test_switch_shortcut_must_belong_to_mode():
     s = validate({"mode": BROWSER, "switch_shortcut": SHUFFLE_APPS})
     assert s.switch_shortcut == "ctrl_tab"
     s = validate({"mode": REMOTE_APP, "switch_shortcut": "ctrl_tab"})
-    assert s.switch_shortcut == SHUFFLE_APPS
+    assert s.switch_shortcut == CYCLE_APPS
 
 
 def test_mode_change_resets_shortcut(tmp_path):
@@ -49,7 +49,7 @@ def test_mode_change_resets_shortcut(tmp_path):
     store.load()
     assert store.update(mode=BROWSER).switch_shortcut == "ctrl_tab"
     assert store.update(switch_shortcut="ctrl_shift_tab").switch_shortcut == "ctrl_shift_tab"
-    assert store.update(mode=REMOTE_APP).switch_shortcut == SHUFFLE_APPS
+    assert store.update(mode=REMOTE_APP).switch_shortcut == CYCLE_APPS
 
 
 def test_unknown_setting_rejected(tmp_path):
@@ -97,3 +97,11 @@ def test_minimize_target_default_and_validation():
     assert DEFAULTS.minimize_to == "taskbar"
     assert validate({"minimize_to": "tray"}).minimize_to == "tray"
     assert validate({"minimize_to": "desktop"}).minimize_to == "taskbar"
+
+
+def test_old_default_shuffle_migrates_to_cycle():
+    assert validate({"schema_version": 1, "switch_shortcut": "shuffle_apps"}).switch_shortcut == CYCLE_APPS
+    assert validate({"schema_version": 1, "switch_shortcut": "alt_pagedown"}).switch_shortcut == CYCLE_APPS
+    assert validate({"schema_version": 1, "switch_shortcut": "alt_pageup"}).switch_shortcut == "alt_pageup"
+    # once saved with the new schema, a deliberate choice of Shuffle is kept
+    assert validate({"schema_version": 2, "switch_shortcut": "shuffle_apps"}).switch_shortcut == SHUFFLE_APPS

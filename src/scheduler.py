@@ -27,7 +27,8 @@ from enum import Enum
 
 from input_safety import SafetyGate
 from keyboard_navigation import (
-    PACING, REMOTE_APP_SWITCHES, SHUFFLE_APPS, SWITCH_SHORTCUTS, ActionResult, AppShuffler, KeyboardNavigator,
+    CYCLE_APPS, PACING, REMOTE_APP_SWITCHES, SHUFFLE_APPS, SWITCH_SHORTCUTS, ActionResult, AppShuffler,
+    KeyboardNavigator,
     chord_text, remote_app_keys, scroll_key_for,
 )
 from pointer_controller import ManualMovementMonitor, PointerController
@@ -65,7 +66,7 @@ class PointerState(str, Enum):
 class EngineConfig:
     keyboard_enabled: bool = True
     interval_s: float = 13 * 60
-    switch_shortcut: str = SHUFFLE_APPS
+    switch_shortcut: str = CYCLE_APPS
     app_count: int = 4
     scroll_key: str = "page"
     scroll_direction: str = "alternate"
@@ -620,7 +621,8 @@ class AutomationEngine:
                     if shuffler is not None:
                         shuffler.commit()
                     took = r.message.rsplit(" over ", 1)[-1] if " over " in r.message else ""
-                    order = f"; shuffled order of {cfg.app_count}" if shuffler is not None else ""
+                    order = (f"; shuffled order of {cfg.app_count}" if shuffler is not None else
+                             "; cycling through all open apps" if switch.id in (CYCLE_APPS, "alt_pagedown") else "")
                     r = ActionResult(True, "ok", f"Switched remote app with {chord_text(keys, steps)}"
                                                  f"{' over ' + took if took else ''} ({why}{order})")
                 elif r.code == "focus_changed" and "tab" in keys and "alt" in keys:

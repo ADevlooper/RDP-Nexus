@@ -32,6 +32,24 @@ def test_remote_app_keys_follow_rdp_keyboard_mode():
     assert remote_app_keys("alt_pagedown", False) == ("alt", "pagedown")
 
 
+def test_cycle_uses_one_shift_tab_per_switch():
+    from keyboard_navigation import CYCLE_APPS, MODE_DEFAULT_SWITCH, REMOTE_APP, remote_app_keys
+    assert MODE_DEFAULT_SWITCH[REMOTE_APP] == CYCLE_APPS
+    assert remote_app_keys(CYCLE_APPS, True) == ("alt", "shift", "tab")
+    assert remote_app_keys(CYCLE_APPS, False) == ("alt", "pagedown")
+
+
+def test_one_shift_tab_cycles_through_every_app():
+    """Model of the Windows Alt+Tab list: Alt+Shift+Tab once selects the least recently used app."""
+    for n in range(2, 8):
+        mru = list(range(n))
+        seen = [mru[0]]
+        for _ in range(n - 1):
+            mru.insert(0, mru.pop())  # last (least recent) app comes to the front
+            seen.append(mru[0])
+        assert sorted(seen) == list(range(n))  # n switches visit all n apps, none repeated
+
+
 def test_mode_options_reference_existing_shortcuts():
     for options in MODE_SWITCH_OPTIONS.values():
         assert all(o in SWITCH_SHORTCUTS for o in options)

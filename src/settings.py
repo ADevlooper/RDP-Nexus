@@ -21,7 +21,7 @@ from keyboard_navigation import (
 
 log = logging.getLogger(__name__)
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2  # 2: Remote apps default changed from Shuffle apps to Cycle through all apps
 
 INTERVAL_MIN, INTERVAL_MAX = 1.0, 240.0          # minutes
 POINTER_INTERVAL_MIN, POINTER_INTERVAL_MAX = 10, 900  # seconds
@@ -88,7 +88,10 @@ def _opt_int(value):
 def validate(raw: dict) -> Settings:
     d = DEFAULTS
     mode = _choice(raw.get("mode"), d.mode, MODES)
-    switch = _choice(raw.get("switch_shortcut"), MODE_DEFAULT_SWITCH[mode], MODE_SWITCH_OPTIONS[mode])
+    raw_switch = raw.get("switch_shortcut")
+    if raw.get("schema_version", 1) == 1 and raw_switch in ("shuffle_apps", "alt_pagedown"):
+        raw_switch = MODE_DEFAULT_SWITCH[REMOTE_APP]  # old default / old "Previous app" -> cycle
+    switch = _choice(raw_switch, MODE_DEFAULT_SWITCH[mode], MODE_SWITCH_OPTIONS[mode])
     return Settings(
         schema_version=SCHEMA_VERSION,
         interval_minutes=round(_num(raw.get("interval_minutes"), d.interval_minutes, INTERVAL_MIN, INTERVAL_MAX,

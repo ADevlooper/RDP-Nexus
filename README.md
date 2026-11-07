@@ -17,8 +17,10 @@ the moment the RDP window isn't the active window, and it never touches your loc
   one-line status. Expand it for settings; minimize it to the taskbar (default) or the system tray.
 - **Start / Pause / Resume / Stop**, with a countdown to the next cycle and clear states:
   **Stopped**, **Running**, **Paused**, **RDP Unavailable** and **Manual pointer control**.
-- **Shuffle apps** (default): visits every app open in the remote session in a random order,
-  re-shuffled each round, and **never selects the same app twice in a row**.
+- **Cycle through all apps** (default): like pressing Alt+Tab to go from VS Code to the browser to
+  Visual Studio and round again. Every switch brings up the app used longest ago, so it visits **every**
+  open app in turn and never shows the same app twice in a row. No app count needed.
+- **Shuffle apps**: visits every app once per round in a random order that changes each round.
 - **Remote apps** and **Browser tabs** modes with an allow-list of shortcuts, plus a configurable
   scroll key and direction (down, up or alternate).
 - **Gentle pointer movement**: small, smooth glides that stay inside the RDP window's client area,
@@ -50,8 +52,8 @@ Requires Windows 10 or 11 (x64). Python is **not** required.
 1. Open your Remote Desktop connection (`mstsc`, or the Microsoft Remote Desktop / Windows App client).
 2. In RDP Nexus click **▾** (settings) → **Target**, then pick the RDP window from the list, or click
    **Pick by clicking it** and click inside the RDP window.
-3. On the **Keys** tab set **Open apps** to the number of apps open *inside the remote session*
-   (the number you would see in its Alt+Tab list).
+3. On the **Keys** tab keep **Switch → Cycle through all apps** (default). Only for *Shuffle apps*:
+   set **Open apps** to the number of apps open inside the remote session.
 4. Check it: on the **Keys** tab press **Test now**, click inside the RDP window and keep still.
    Within a couple of seconds the remote session should switch to another app and scroll. The result
    is shown in the status line and on the **Log** tab.
@@ -71,7 +73,7 @@ Each cycle sends **one** switch action, then (after half a second, if the target
 
 | Mode | Switch options | Notes |
 | --- | --- | --- |
-| **Remote apps** | **Shuffle apps** (default), Next app, Previous app, Off | Keys are chosen automatically before every switch (see *Which keys switch remote apps* below). |
+| **Remote apps** | **Cycle through all apps** (default), Shuffle apps, Back and forth (last two apps), Off | Keys are chosen automatically before every switch (see *Which keys switch remote apps* below). |
 | **Browser tabs** | Ctrl+Tab, Ctrl+Shift+Tab, Ctrl+Page Down, Ctrl+Page Up, Off | Acts on the browser that is active in the remote session. |
 
 Scroll: Page Down/Page Up or Arrow Down/Up (or Off), with direction **Down**, **Up** or **Alternate**
@@ -89,6 +91,12 @@ RDP Nexus reads the setting from the `.rdp` file the client was started with, or
 `Documents\Default.rdp`. It checks whether the window is full screen (no title bar, covers its
 monitor) right before every switch, and the **Target** tab shows the choice and why. If focus ever
 leaves the RDP window right after an Alt+Tab, it suspends and uses Alt+Page Up for that window from then on.
+
+**Cycle through all apps** sends one Alt+Shift+Tab (Alt+Page Down when windowed) per switch. In the
+Alt+Tab list that selects the app used longest ago, so repeated switches walk through every open app
+and come back round, however many apps are open. Verified live on a full-screen session: four
+screenshots showed four different apps. **Back and forth** sends a single Alt+Tab, which alternates
+between the two most recent apps.
 
 **Shuffle apps** models the remote Alt+Tab list, which Windows keeps in most-recently-used order.
 To bring up the app *k* places down that list it holds Alt, taps Tab (or Page Up) *k* times (*k* ≥ 1),
@@ -149,7 +157,7 @@ Uninstalling removes the program, shortcuts, the startup entry and the logs. You
 | --- | --- |
 | Always **RDP Unavailable – not the active window** | Click inside the RDP window after pressing Start. RDP Nexus itself is a local window, so clicking it takes focus away from RDP. |
 | RDP window isn't in the list | Make sure it's connected (not just the "Remote Desktop Connection" dialog) and press ⟳. Only `mstsc.exe`/`msrdc.exe` session windows are supported. |
-| App switching does nothing | Update to 1.0.3 or later: earlier versions only sent Alt+Page Up, which a full-screen session ignores. Use **Keys → Test now** and read the **Log** tab and **Target → Keys**. If the log says *Switched remote app* but nothing changed: check that more than one app is open in the session and that **Open apps** matches, then try **Options → Key timing → Slow**. |
+| App switching does nothing | Update to 1.0.3 or later: earlier versions only sent Alt+Page Up, which a full-screen session ignores. Use **Keys → Test now** and read the **Log** tab and **Target → Keys**. If the log says *Switched remote app* but nothing changed: check that more than one app is open in the session (and, for Shuffle apps, that **Open apps** matches), then try **Options → Key timing → Slow**. Use **Cycle through all apps** if you want every app visited without counting them. |
 | RDP Nexus isn't on the taskbar | Check **Options → Minimize to**. With *System tray*, the — button and launch-at-sign-in hide the panel in the tray. Windows 11 puts new tray icons in the hidden overflow, so click **^** next to the clock (drag the icon onto the taskbar to keep it visible). With *Taskbar* (default since 1.0.2) it always keeps a taskbar button. |
 | "Blocked by Windows" | The RDP client runs as administrator and RDP Nexus doesn't. Windows blocks input from lower-integrity apps (UIPI), so run both at the same level. |
 | Pointer stays on *Arming* | Rest the pointer over the remote desktop (not over the RDP title bar or RDP Nexus) for 3 seconds. |
