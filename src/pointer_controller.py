@@ -260,6 +260,31 @@ class PointerController:
                               time=0, dwExtraInfo=INJECTION_SIGNATURE)
         return inp
 
+    def wheel(self, target: RdpWindow, down: bool, idle_guard_s: float, notches: int = 3) -> ActionResult:
+        """Scroll whatever is under the pointer, only if the pointer is over the RDP window.
+
+        The wheel goes to the window under the cursor, so it is never sent while the pointer is over
+        a local window (or over RDP Nexus itself).  Never moves the pointer and never clicks.
+        """
+        verdict = self.gate.check_pointer(target, idle_guard_s)
+        if not verdict.ok:
+            return ActionResult(False, verdict.code, f"Mouse-wheel scroll skipped: {verdict.message}")
+        area = self.inspector.input_area(target)
+        x, y = self._cursor()
+        if area is None or not area.contains(x, y) or self.inspector.root_at(x, y) != target.hwnd:
+            return ActionResult(False, "outside", "Mouse-wheel scroll skipped: the pointer isn't over the RDP "
+                                                  "window (rest it over the remote screen)")
+        if not self.gate.still_foreground(target):
+            return ActionResult(False, "not_foreground", "Mouse-wheel scroll skipped: RDP window lost focus")
+        amount = (-1 if down else 1) * w.WHEEL_DELTA * notches
+        inp = w.INPUT(type=w.INPUT_MOUSE)
+        inp.mi = w.MOUSEINPUT(dx=0, dy=0, mouseData=amount & 0xFFFFFFFF, dwFlags=w.MOUSEEVENTF_WHEEL, time=0,
+                              dwExtraInfo=INJECTION_SIGNATURE)
+        if self._send([inp]) != 1:
+            return ActionResult(False, "send_failed", "Mouse-wheel scroll was blocked by Windows")
+        self.ledger.record()
+        return ActionResult(True, "ok", f"Scrolled {'down' if down else 'up'} with the mouse wheel ({notches} notches)")
+
     def glide(self, target: RdpWindow, range_px: int, idle_guard_s: float,
               cancel: threading.Event) -> GlideOutcome:
         verdict = self.gate.check_pointer(target, idle_guard_s)

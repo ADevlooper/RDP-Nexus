@@ -97,6 +97,8 @@ MODE_DEFAULT_SWITCH = {BROWSER: "ctrl_tab", REMOTE_APP: CYCLE_APPS}
 SCROLL_KEYS = {  # id -> (label, key for "down", key for "up")
     "page": ("Page Up / Page Down", "pagedown", "pageup"),
     "arrow": ("Arrow Up / Down", "down", "up"),
+    # Mouse wheel is sent by the pointer controller (only while the pointer is over the RDP window).
+    "wheel": ("Mouse wheel · scrolls what's under the pointer", None, None),
     "off": ("Off · no scrolling", None, None),
 }
 SCROLL_DIRECTIONS = {"down": "Down", "up": "Up", "alternate": "Alternate"}

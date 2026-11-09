@@ -33,6 +33,7 @@ from keyboard_navigation import (
 )
 from pointer_controller import ManualMovementMonitor, PointerController
 from rdp_settings import HOOK_FULLSCREEN, HOOK_REMOTE, RdpKeyboardSettings, windows_keys_go_remote
+from screen_watch import SwitchWatcher
 from settings import Settings
 from window_detection import CLOSED, REPLACED, RdpWindow, TargetStatus, WindowInspector
 
@@ -129,8 +130,10 @@ class AutomationEngine:
     def __init__(self, inspector: WindowInspector, gate: SafetyGate, keyboard: KeyboardNavigator,
                  pointer: PointerController, monitor: ManualMovementMonitor,
                  config: EngineConfig | None = None, clock=time.monotonic, cursor=None,
-                 tick_s: float = 0.1, start_thread: bool = True, rdp_keys: RdpKeyboardSettings | None = None):
+                 tick_s: float = 0.1, start_thread: bool = True, rdp_keys: RdpKeyboardSettings | None = None,
+                 screen_watcher: SwitchWatcher | None = None):
         self.inspector = inspector
+        self.screen = screen_watcher or SwitchWatcher(inspector)
         self.rdp_keys = rdp_keys or RdpKeyboardSettings()
         # RDP windows where Alt+Tab was seen reaching the local computer: never use Alt+Tab there again.
         self._alt_tab_unsafe: set[int] = set()
@@ -604,10 +607,15 @@ class AutomationEngine:
         pacing = PACING.get(cfg.key_timing, PACING["normal"])
         switch = SWITCH_SHORTCUTS.get(cfg.switch_shortcut, SWITCH_SHORTCUTS["off"])
         sent_any = False
+        scrolling = cfg.scroll_key != "off"
+        area = before = None
         try:
             if switch.keys:
                 if cancel.is_set():
                     return sent_any
+                if scrolling:  # remember the screen so we can tell when the switched-to app has appeared
+                    area = self.inspector.input_area(target)
+                    before = self.screen.snapshot(area)
                 keys, why = switch.keys, ""
                 if switch.id in REMOTE_APP_SWITCHES:
                     keys, why = self._remote_switch(target, switch.id)
@@ -634,16 +642,24 @@ class AutomationEngine:
                     return sent_any
                 sent_any = True
 
-            key = None
             down = self._scroll_down_next if cfg.scroll_direction == "alternate" else cfg.scroll_direction == "down"
-            if cfg.scroll_key != "off":
-                key = scroll_key_for(cfg.scroll_key, down)
-            if key:
-                if sent_any and cancel.wait(cfg.action_gap_s):
-                    return sent_any
+            wheel = cfg.scroll_key == "wheel"
+            key = scroll_key_for(cfg.scroll_key, down) if scrolling and not wheel else None
+            if key or wheel:
+                if sent_any:
+                    # Scroll the app we switched to, not the old one: wait until it has appeared on screen.
+                    seen, waited = self.screen.wait_for_switch(area, before, cancel)
+                    if cancel.is_set():
+                        return sent_any
+                    with self._lock:
+                        self._log("info", f"New app appeared after {waited:.1f} s; scrolling it now" if seen else
+                                          f"No visible change after {waited:.1f} s; scrolling anyway")
                 if cancel.is_set():
                     return sent_any
-                r = self.keyboard.send_chord(target, (key,), cfg.idle_guard_s, pacing=pacing, cancel=cancel)
+                if wheel:
+                    r = self.pointer.wheel(target, down, cfg.idle_guard_s)
+                else:
+                    r = self.keyboard.send_chord(target, (key,), cfg.idle_guard_s, pacing=pacing, cancel=cancel)
                 if not self._record(r):
                     return sent_any
                 sent_any = True
